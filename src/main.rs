@@ -104,8 +104,9 @@ fn main() -> io::Result<()> {
         stats.reverse();
         tf_index.insert(file_path, tf);
     }
-    for (path, tf) in tf_index {
-        println!("{path:?} has {count} unique tokens", path = path, count = tf.len());
-    }
+    let index_path = "index.json";
+    println!("Writing index to {index_path}...", index_path = index_path);
+    let index_file = File::create(index_path)?;
+    serde_json::to_writer_pretty(index_file, &tf_index)?;
     Ok(())
 }
