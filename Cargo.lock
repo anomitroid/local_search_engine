@@ -5,3 +5,12 @@ version = 4
 [[package]]
 name = "local_search_engine"
 version = "0.1.0"
+dependencies = [
+ "xml-rs",
+]
+
+[[package]]
+name = "xml-rs"
+version = "0.8.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5b940ebc25896e71dd073bad2dbaa2abfe97b0a391415e22ad1326d9c54e3c4"
