@@ -80,6 +80,15 @@ type TermFreq = HashMap<String, usize>;
 type TermFreqIndex = HashMap<PathBuf, TermFreq>;
 
 fn main() -> io::Result<()> {
+    let index_path = "index.json";
+    let index_file = File::open(index_path)?;
+    println!("Reading index from {index_path}...", index_path = index_path);
+    let tf_index: TermFreqIndex = serde_json::from_reader(index_file)?;
+    println!("{index_path} contains {count} files", index_path = index_path, count = tf_index.len());
+    Ok(())
+}
+
+fn main2() -> io::Result<()> {
     let dir_path = "docs.gl/gl4/";
     let dir = fs::read_dir(dir_path)?;
     let top_n = 10;
