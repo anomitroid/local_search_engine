@@ -3,6 +3,8 @@ use std::fs::File;
 use xml::reader::{EventReader, XmlEvent};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::env;
+use std::process::exit;
 
 struct Lexer<'a> {
     content: &'a [char],
@@ -111,6 +113,36 @@ fn index_folder(dir_path: &str) -> io::Result<()> {
 }
 
 fn main() {
-    index_folder("docs.gl/gl4").expect("failed to index folder");
-    check_index("index.json").expect("failed to check index");
+    let mut args = env::args();
+    let _program = args.next().expect("path to program is provided");
+    let subcommand = args.next().unwrap_or_else(|| {
+        println!("ERROR: no subcommand is provided");
+        exit(1);
+    });
+    match subcommand.as_str() {
+        "index" => {
+            let dir_path = args.next().unwrap_or_else(|| {
+                println!("ERROR: no directory path is provided");
+                exit(1);
+            });
+            index_folder(&dir_path).unwrap_or_else(|err| {
+                println!("ERROR: could not index folder {dir_path}: {err}", dir_path = dir_path, err = err);
+                exit(1);
+            });
+        },
+        "search" => {
+            let index_path = args.next().unwrap_or_else(|| {
+                println!("ERROR: no index file path is provided");
+                exit(1);
+            });
+            check_index(&index_path).unwrap_or_else(|err| {
+                println!("ERROR: could not check index file {index_path}: {err}", index_path = index_path, err = err);
+                exit(1);
+            });
+        },
+        _ => {
+            println!("ERROR: unknown subcommand {subcommand}");
+            exit(1);
+        }
+    }
 }
