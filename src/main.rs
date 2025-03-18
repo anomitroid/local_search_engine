@@ -1,11 +1,9 @@
-use std::hash::Hash;
 use std::{fs, io};
 use std::fs::File;
 use xml::reader::{EventReader, XmlEvent};
-use std::path::{Iter, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
-#[derive(Debug)]
 struct Lexer<'a> {
     content: &'a [char],
 }
@@ -58,11 +56,6 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-#[allow(dead_code)]
-fn index_document(_doc_content: &str) -> HashMap<String, usize> {
-    todo!("not implemented");
-}
-
 fn read_entire_xml_file<P: AsRef<Path>>(file_path: P) -> io::Result<String> {
     let file = File::open(file_path)?;
     let er = EventReader::new(file);
@@ -79,19 +72,16 @@ fn read_entire_xml_file<P: AsRef<Path>>(file_path: P) -> io::Result<String> {
 type TermFreq = HashMap<String, usize>;
 type TermFreqIndex = HashMap<PathBuf, TermFreq>;
 
-fn main() -> io::Result<()> {
-    let index_path = "index.json";
+fn check_index(index_path: &str) -> io::Result<()> {
     let index_file = File::open(index_path)?;
-    println!("Reading index from {index_path}...", index_path = index_path);
-    let tf_index: TermFreqIndex = serde_json::from_reader(index_file)?;
-    println!("{index_path} contains {count} files", index_path = index_path, count = tf_index.len());
+    println!("Reading {} index file...", index_path);
+    let tf_index: TermFreqIndex = serde_json::from_reader(index_file).expect("serde does not fail.");
+    println!("{} index file contains {} files", index_path, tf_index.len());
     Ok(())
 }
 
-fn main2() -> io::Result<()> {
-    let dir_path = "docs.gl/gl4/";
+fn index_folder(dir_path: &str) -> io::Result<()> {
     let dir = fs::read_dir(dir_path)?;
-    let top_n = 10;
     let mut tf_index = TermFreqIndex::new();
     for file in dir {
         let file_path = file?.path();
@@ -116,6 +106,11 @@ fn main2() -> io::Result<()> {
     let index_path = "index.json";
     println!("Writing index to {index_path}...", index_path = index_path);
     let index_file = File::create(index_path)?;
-    serde_json::to_writer_pretty(index_file, &tf_index)?;
+    serde_json::to_writer_pretty(index_file, &tf_index).expect("serde does not fail.");
     Ok(())
+}
+
+fn main() {
+    index_folder("docs.gl/gl4").expect("failed to index folder");
+    check_index("index.json").expect("failed to check index");
 }
