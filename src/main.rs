@@ -150,36 +150,29 @@ fn usage(program: &str) {
     eprintln!("    serve [address]          start local HTTP server with Web Interface");
 }
 
+fn serve_static_file(request: Request, file_path: &str, content_type: &str) -> Result<(), ()> {
+    let content_type_header = Header::from_bytes("Content-Type", content_type).expect("header is fine");
+    let file = File::open(file_path).map_err(|err| {
+        eprintln!("ERROR: could serve {file_path}: {err}", file_path = file_path, err = err);
+    })?;
+    let response = Response::from_file(file).with_header(content_type_header);
+    request.respond(response).map_err(|err| {
+        eprintln!("ERROR: could not serve static file {file_path}: {err}", file_path = file_path, err = err);
+    })
+}
+
+fn serve_404(request: Request) -> Result<(), ()> {
+    request.respond(Response::from_string("404").with_status_code(StatusCode(404))).map_err(|err| {
+        eprintln!("ERROR: could not respond to request: {err}", err = err);
+    })
+}
+
 fn serve_request(request: Request) -> Result<(), ()> {
     println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
     match (request.method(), request.url()) {
-        (Method::Get, "/index.js") => {
-            let content_type_text_javascript = Header::from_bytes("Content-Type", "text/javascript; charset=utf-8").expect("header is fine");
-            let index_js_path = "index.js";
-            let index_js_file = File::open(index_js_path).map_err(|err| {
-                eprintln!("ERROR: could not open {index_js_path}: {err}", index_js_path = index_js_path, err = err);
-            })?;
-            let response = Response::from_file(index_js_file).with_header(content_type_text_javascript);
-            request.respond(response).map_err(|err| {
-                eprintln!("ERROR: could not respond to request: {err}", err = err);
-            })?;        
-        }
-        (Method::Get, "/") | (Method::Get, "/index.html") => {
-            let content_type_text_html = Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("header is fine");
-            let index_html_path = "index.html";
-            let index_html_file = File::open(index_html_path).map_err(|err| {
-                eprintln!("ERROR: could not open {index_html_path}: {err}", index_html_path = index_html_path, err = err);
-            })?;
-            let response = Response::from_file(index_html_file).with_header(content_type_text_html);
-            request.respond(response).map_err(|err| {
-                eprintln!("ERROR: could not respond to request: {err}", err = err);
-            })?;        
-        },
-        _ => {
-            request.respond(Response::from_string("404").with_status_code(StatusCode(404))).map_err(|err| {
-                eprintln!("ERROR: could not respond to request: {err}", err = err);
-            })?;
-        }
+        (Method::Get, "/index.js") => serve_static_file(request, "index.js", "text/javascript; charset=utf-8")?,
+        (Method::Get, "/") | (Method::Get, "/index.html") => serve_static_file(request, "index.html", "text/html; charset=utf-8")?,
+        _ => serve_404(request)?
     }
     Ok(())
 } 
@@ -215,7 +208,7 @@ fn entry() -> Result<(), ()> {
             })?;
             println!("INFO: HTTP server is running at http://{address}/", address = address);
             for request in server.incoming_requests() {
-                serve_request(request);
+                serve_request(request)?;
             }
         },
         _ => {
