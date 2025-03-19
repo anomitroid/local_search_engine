@@ -106,15 +106,22 @@ fn save_tf_index(tf_index: &TermFreqIndex, index_path: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn tf_index_of_dir(dir_path: &str) -> Result<TermFreqIndex, ()> {
+fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
-        eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path, err = err);
+        eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
-    let mut tf_index = TermFreqIndex::new();
     'next_file: for file in dir {
-        let file_path = file.map_err(|err| {
-            eprintln!("ERROR: could not read next file in directory {dir_path} during indexing: {err}");
-        })?.path();
+        let file = file.map_err(|err| {
+            eprintln!("ERROR: could not read next file in directory {dir_path} during indexing: {err}", dir_path = dir_path.display(), err = err);
+        })?;
+        let file_path = file.path();
+        let file_type = file.file_type().map_err(|err| {
+            eprintln!("ERROR: could not get file type of {file_path}: {err}", file_path = file_path.display(), err = err);
+        })?;
+        if file_type.is_dir() {
+            tf_index_of_dir(&file_path, tf_index)?;
+            continue 'next_file;
+        }
         println!("Indexing {file_path:?}...", file_path = file_path);
         let content = match parse_entire_xml_file(&file_path) {
             Ok(content) => content.chars().collect::<Vec<_>>(),
@@ -131,7 +138,7 @@ fn tf_index_of_dir(dir_path: &str) -> Result<TermFreqIndex, ()> {
         }
         tf_index.insert(file_path, tf);
     }
-    Ok(tf_index)
+    Ok(())
 }
 
 fn usage(program: &str) {
@@ -154,7 +161,8 @@ fn entry() -> Result<(), ()> {
                 usage(&program);
                 println!("ERROR: no directory path is provided");
             })?;
-            let tf_index = tf_index_of_dir(&dir_path)?;
+            let mut tf_index = TermFreqIndex::new();
+            tf_index_of_dir(Path::new(&dir_path), &mut tf_index)?;
             save_tf_index(&tf_index, "index.json")?;
         },
         "search" => {
