@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process::{exit, ExitCode};
 use std::result::Result;
-use tiny_http::{Server, Response, Header};
+use tiny_http::{Header, Request, Response, Server};
 
 struct Lexer<'a> {
     content: &'a [char],
@@ -150,6 +150,20 @@ fn usage(program: &str) {
     eprintln!("    serve [address]          start local HTTP server with Web Interface");
 }
 
+fn serve_request(request: Request) -> Result<(), ()> {
+    println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
+    let content_type_text_html = Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("header is fine");
+    let index_html_path = "index.html";
+    let index_html_file = File::open(index_html_path).map_err(|err| {
+        eprintln!("ERROR: could not open {index_html_path}: {err}", index_html_path = index_html_path, err = err);
+    })?;
+    let response = Response::from_file(index_html_file).with_header(content_type_text_html);
+    request.respond(response).map_err(|err| {
+        eprintln!("ERROR: could not respond to request: {err}", err = err);
+    })?;
+    Ok(())
+} 
+
 fn entry() -> Result<(), ()> {
     let mut args = env::args();
     let program = args.next().expect("path to program is provided");
@@ -181,21 +195,7 @@ fn entry() -> Result<(), ()> {
             })?;
             println!("INFO: HTTP server is running at http://{address}/", address = address);
             for request in server.incoming_requests() {
-                println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
-                let content_type_text_html = Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("header is fine");
-                let response = Response::from_string(r#"
-                    <html>
-                        <head>
-                            <title>Search Engine</title>
-                        </head>
-                        <body>
-                            <h1>Search Engine</h1>
-                        </body>
-                    </html>
-                "#).with_header(content_type_text_html);
-                request.respond(response).unwrap_or_else(|err| {
-                    eprintln!("ERROR: could not respond to request: {err}", err = err);
-                });
+                serve_request(request);
             }
         },
         _ => {
