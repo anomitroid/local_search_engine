@@ -5,7 +5,7 @@ use xml::reader::{EventReader, XmlEvent};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::env;
-use std::process::exit;
+use std::process::{exit, ExitCode};
 use std::result::Result;
 
 struct Lexer<'a> {
@@ -137,9 +137,16 @@ fn tf_index_of_dir(dir_path: &str) -> Result<TermFreqIndex, ()> {
     Ok(tf_index)
 }
 
-fn main() -> Result<(), ()> {
+fn usage(program: &str) {
+    eprintln!("USAGE: {program} <subcommand> [args...]", program = program);
+    eprintln!("  Subcommands:");
+    eprintln!("    index <dir_path> - index all XML files in the directory and save the index to index.json");
+    eprintln!("    search <index_path> - search the index file");
+}
+
+fn entry() -> Result<(), ()> {
     let mut args = env::args();
-    let _program = args.next().expect("path to program is provided");
+    let program = args.next().expect("path to program is provided");
     let subcommand = args.next().ok_or_else(|| {
         println!("ERROR: no subcommand is provided");
         exit(1);
@@ -147,6 +154,7 @@ fn main() -> Result<(), ()> {
     match subcommand.as_str() {
         "index" => {
             let dir_path = args.next().ok_or_else(|| {
+                usage(&program);
                 println!("ERROR: no directory path is provided");
             })?;
             let tf_index = tf_index_of_dir(&dir_path)?;
@@ -154,14 +162,23 @@ fn main() -> Result<(), ()> {
         },
         "search" => {
             let index_path = args.next().ok_or_else(|| {
+                usage(&program);
                 println!("ERROR: no index file path is provided");
             })?;
             check_index(&index_path)?;
         },
         _ => {
+            usage(&program);
             println!("ERROR: unknown subcommand {subcommand}");
             return Err(())
         }
     }
     Ok(())
+}
+
+fn main() -> ExitCode {
+    match entry() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(()) => ExitCode::FAILURE,
+    }
 }
