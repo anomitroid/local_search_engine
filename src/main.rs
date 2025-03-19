@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process::{exit, ExitCode};
 use std::result::Result;
+use tiny_http::{Server, Response};
 
 struct Lexer<'a> {
     content: &'a [char],
@@ -146,7 +147,7 @@ fn usage(program: &str) {
     eprintln!("  Subcommands:");
     eprintln!("    index <dir_path>         index all XML files in the directory and save the index to index.json");
     eprintln!("    search <index_path>      search the index file");
-    eprintln!("    serve                    start local HTTP server with Web Interface");
+    eprintln!("    serve [address]          start local HTTP server with Web Interface");
 }
 
 fn entry() -> Result<(), ()> {
@@ -174,7 +175,18 @@ fn entry() -> Result<(), ()> {
             check_index(&index_path)?;
         },
         "serve" => {
-            todo!("serve subcommand is not implemented yet");
+            let address = args.next().unwrap_or("127.0.0.1:6969".to_string());
+            let server = Server::http(&address).map_err(|err| {
+                eprintln!("ERROR: could not start HTTP server at {address}: {err}", address = address, err = err);
+            })?;
+            println!("INFO: HTTP server is running at http://{address}/", address = address);
+            for request in server.incoming_requests() {
+                println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
+                let response = Response::from_string("hello, world");
+                request.respond(response).unwrap_or_else(|err| {
+                    eprintln!("ERROR: could not respond to request: {err}", err = err);
+                });
+            }
         },
         _ => {
             usage(&program);
