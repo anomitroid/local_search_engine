@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process::{exit, ExitCode};
 use std::result::Result;
-use tiny_http::{Server, Response};
+use tiny_http::{Server, Response, Header};
 
 struct Lexer<'a> {
     content: &'a [char],
@@ -182,7 +182,17 @@ fn entry() -> Result<(), ()> {
             println!("INFO: HTTP server is running at http://{address}/", address = address);
             for request in server.incoming_requests() {
                 println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
-                let response = Response::from_string("hello, world");
+                let content_type_text_html = Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("header is fine");
+                let response = Response::from_string(r#"
+                    <html>
+                        <head>
+                            <title>Search Engine</title>
+                        </head>
+                        <body>
+                            <h1>Search Engine</h1>
+                        </body>
+                    </html>
+                "#).with_header(content_type_text_html);
                 request.respond(response).unwrap_or_else(|err| {
                     eprintln!("ERROR: could not respond to request: {err}", err = err);
                 });
