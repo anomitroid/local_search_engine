@@ -144,8 +144,9 @@ fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), 
 fn usage(program: &str) {
     eprintln!("USAGE: {program} <subcommand> [args...]", program = program);
     eprintln!("  Subcommands:");
-    eprintln!("    index <dir_path> - index all XML files in the directory and save the index to index.json");
-    eprintln!("    search <index_path> - search the index file");
+    eprintln!("    index <dir_path>         index all XML files in the directory and save the index to index.json");
+    eprintln!("    search <index_path>      search the index file");
+    eprintln!("    serve                    start local HTTP server with Web Interface");
 }
 
 fn entry() -> Result<(), ()> {
@@ -171,6 +172,9 @@ fn entry() -> Result<(), ()> {
                 println!("ERROR: no index file path is provided");
             })?;
             check_index(&index_path)?;
+        },
+        "serve" => {
+            todo!("serve subcommand is not implemented yet");
         },
         _ => {
             usage(&program);
