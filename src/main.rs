@@ -142,6 +142,16 @@ fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), 
     Ok(())
 }
 
+fn tf(t: &str, d: &TermFreq) -> f32 {
+    d.get(t).cloned().unwrap_or(0) as f32 / d.iter().map(|(_, f)| *f).sum::<usize>() as f32
+}
+
+fn idf(t: &str, d: &TermFreqIndex) -> f32 {
+    let n = d.len() as f32;
+    let m = d.values().filter(|tf| tf.contains_key(t)).count().max(1) as f32;
+    (n / m).log10()
+}
+
 fn usage(program: &str) {
     eprintln!("USAGE: {program} <subcommand> [args...]", program = program);
     eprintln!("  Subcommands:");
@@ -167,44 +177,39 @@ fn serve_404(request: Request) -> Result<(), ()> {
     })
 }
 
-fn tf(t: &str, d: &TermFreq) -> f32 {
-    d.get(t).cloned().unwrap_or(0) as f32 / d.iter().map(|(_, f)| *f).sum::<usize>() as f32
+fn serve_api_search(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), ()> {
+    let mut buf = Vec::new();
+    request.as_reader().read_to_end(&mut buf).map_err(|err| {
+        eprintln!("ERROR: could not read body of search request: {err}", err = err);
+    })?;
+    let body = str::from_utf8(&buf).map_err(|err| {
+        eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
+    })?.chars().collect::<Vec<_>>();
+    let mut result = Vec::<(&Path, f32)>::new();
+    for (path, tf_table) in tf_index {
+        let mut rank = 0f32;
+        for token in Lexer::new(&body) {
+            rank += tf(&token, &tf_table) * idf(&token, &tf_index);
+        }
+        result.push((path, rank));
+    }
+    result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+    let json = serde_json::to_string(&result.iter().take(20).collect::<Vec<_>>()).map_err(|err| {
+        eprintln!("ERROR: could not convert search results to JSON: {err}", err = err);
+    })?;
+    let content_type_header = Header::from_bytes("Content-Type", "application/json; charset=utf-8").expect("header is fine");
+    let response = Response::from_string(json).with_header(content_type_header);
+    return request.respond(response).map_err(|err| {
+        eprintln!("ERROR: could not respond to search request: {err}", err = err);
+    })
 }
 
-fn idf(t: &str, d: &TermFreqIndex) -> f32 {
-    let n = d.len() as f32;
-    let m = d.values().filter(|tf| tf.contains_key(t)).count().max(1) as f32;
-    (n / m).log10()
-}
 
-fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), ()> {
+fn serve_request(tf_index: &TermFreqIndex, request: Request) -> Result<(), ()> {
     println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
     match (request.method(), request.url()) {
         (Method::Post, "/api/search") => {
-            let mut buf = Vec::new();
-            request.as_reader().read_to_end(&mut buf).map_err(|err| {
-                eprintln!("ERROR: could not read body of search request: {err}", err = err);
-            })?;
-            let body = str::from_utf8(&buf).map_err(|err| {
-                eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
-            })?.chars().collect::<Vec<_>>();
-            let mut result = Vec::<(&Path, f32)>::new();
-            for (path, tf_table) in tf_index {
-                let mut rank = 0f32;
-                for token in Lexer::new(&body) {
-                    rank += tf(&token, &tf_table) * idf(&token, &tf_index);
-                }
-                result.push((path, rank));
-            }
-            result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
-            let json = serde_json::to_string(&result.iter().take(20).collect::<Vec<_>>()).map_err(|err| {
-                eprintln!("ERROR: could not convert search results to JSON: {err}", err = err);
-            })?;
-            let content_type_header = Header::from_bytes("Content-Type", "application/json; charset=utf-8").expect("header is fine");
-            let response = Response::from_string(json).with_header(content_type_header);
-            return request.respond(response).map_err(|err| {
-                eprintln!("ERROR: could not respond to search request: {err}", err = err);
-            })
+            return serve_api_search(tf_index, request)
         },
         (Method::Get, "/index.js") => {
             return serve_static_file(request, "index.js", "text/javascript; charset=utf-8")
@@ -213,10 +218,9 @@ fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), (
             return serve_static_file(request, "index.html", "text/html; charset=utf-8")
         }
         _ => {
-            serve_404(request)?
+            return serve_404(request)
         }
     }
-    Ok(())
 } 
 
 fn entry() -> Result<(), ()> {
