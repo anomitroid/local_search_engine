@@ -182,12 +182,17 @@ fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), (
             let body = str::from_utf8(&buf).map_err(|err| {
                 eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
             })?.chars().collect::<Vec<_>>();
+            let mut result = Vec::<(&Path, f32)>::new();
             for (path, tf_table) in tf_index {
                 let mut total_tf = 0f32;
                 for token in Lexer::new(&body) {
                     total_tf += tf(&token, &tf_table);
                 }
-                println!("{path} => {total_tf}", path = path.display(), total_tf = total_tf);
+                result.push((path, total_tf));
+            }
+            result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+            for (path, rank) in result {
+                println!("{path} => {rank}", path = path.display(), rank = rank);
             }
             request.respond(Response::from_string("ok")).map_err(|err| {
                 eprintln!("ERROR: could not respond to search request: {err}", err = err);
