@@ -39,23 +39,23 @@ impl<'a> Lexer<'a> {
         self.chop(n)
     }
 
-    fn next_token(&mut self) -> Option<&'a [char]> {
+    fn next_token(&mut self) -> Option<String> {
         self.trim_left();
         if self.content.len() == 0 {
             return None;
         }
         if self.content[0].is_numeric() {
-            return Some(self.chop_while(|c| c.is_numeric()));
+            return Some(self.chop_while(|c| c.is_numeric()).iter().collect());
         }
         if self.content[0].is_alphabetic() {
-            return Some(self.chop_while(|c| c.is_alphabetic()));
+            return Some(self.chop_while(|c| c.is_alphabetic()).iter().map(|x| x.to_ascii_uppercase()).collect());
         }
-        return Some(self.chop(1));
+        return Some(self.chop(1).iter().collect());
     }
 }
 
 impl<'a> Iterator for Lexer<'a> {
-    type Item = &'a [char];
+    type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
@@ -130,8 +130,7 @@ fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), 
             Err(()) => continue 'next_file,
         };
         let mut tf = TermFreq::new();
-        for token in Lexer::new(&content) {
-            let term = token.iter().map(|x| x.to_ascii_uppercase()).collect::<String>();
+        for term in Lexer::new(&content) {
             if let Some(freq) = tf.get_mut(&term) {
                 *freq += 1;
             } else {
@@ -180,7 +179,7 @@ fn serve_request(mut request: Request) -> Result<(), ()> {
                 eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
             })?.chars().collect::<Vec<_>>();
             for token in Lexer::new(&body) {
-                println!("TOKEN: {token}", token = token.iter().collect::<String>());
+                println!("TOKEN: {token}", token = token);
             }
             request.respond(Response::from_string("ok")).map_err(|err| {
                 eprintln!("ERROR: could not respond to search request: {err}", err = err);
