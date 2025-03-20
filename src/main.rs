@@ -173,7 +173,7 @@ fn tf(t: &str, d: &TermFreq) -> f32 {
 
 fn idf(t: &str, d: &TermFreqIndex) -> f32 {
     let n = d.len() as f32;
-    let m = 1f32 + d.values().filter(|tf| tf.contains_key(t)).count() as f32;
+    let m = d.values().filter(|tf| tf.contains_key(t)).count().max(1) as f32;
     (n / m).log10()
 }
 
@@ -196,8 +196,8 @@ fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), (
                 }
                 result.push((path, rank));
             }
-            // result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
-            for (path, rank) in result {
+            result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+            for (path, rank) in result.iter().take(10) {
                 println!("{path} => {rank}", path = path.display(), rank = rank);
             }
             request.respond(Response::from_string("ok")).map_err(|err| {
