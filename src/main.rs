@@ -167,6 +167,10 @@ fn serve_404(request: Request) -> Result<(), ()> {
     })
 }
 
+fn tf(t: &str, d: &TermFreq) -> f32 {
+    d.get(t).cloned().unwrap_or(0) as f32 / d.iter().map(|(_, f)| *f).sum::<usize>() as f32
+}
+
 fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), ()> {
     println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
     match (request.method(), request.url()) {
@@ -178,8 +182,12 @@ fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), (
             let body = str::from_utf8(&buf).map_err(|err| {
                 eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
             })?.chars().collect::<Vec<_>>();
-            for token in Lexer::new(&body) {
-                println!("TOKEN: {token}", token = token);
+            for (path, tf_table) in tf_index {
+                let mut total_tf = 0f32;
+                for token in Lexer::new(&body) {
+                    total_tf += tf(&token, &tf_table);
+                }
+                println!("{path} => {total_tf}", path = path.display(), total_tf = total_tf);
             }
             request.respond(Response::from_string("ok")).map_err(|err| {
                 eprintln!("ERROR: could not respond to search request: {err}", err = err);
