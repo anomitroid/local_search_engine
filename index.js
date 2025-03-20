@@ -1,13 +1,8 @@
 console.log("Querying /api/search");
 fetch("/api/search", {
     method: 'POST',
-    mode: 'cors',
-    cache: 'no-cache',
-    credentials: 'same-origin',
     headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'text/plain'
     },
-    redirect: 'follow',
-    referrerPolicy: 'no-referrer',
-    body: JSON.stringify('{"Hello": "World"}')
+    body: "bind texture to buffer",
 }).then(response => console.log(response));
