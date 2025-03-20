@@ -8,6 +8,7 @@ use std::env;
 use std::process::{exit, ExitCode};
 use std::result::Result;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use std::str;
 
 struct Lexer<'a> {
     content: &'a [char],
@@ -167,9 +168,22 @@ fn serve_404(request: Request) -> Result<(), ()> {
     })
 }
 
-fn serve_request(request: Request) -> Result<(), ()> {
+fn serve_request(mut request: Request) -> Result<(), ()> {
     println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
     match (request.method(), request.url()) {
+        (Method::Post, "/api/search") => {
+            let mut buf = Vec::new();
+            request.as_reader().read_to_end(&mut buf).map_err(|err| {
+                eprintln!("ERROR: could not read body of search request: {err}", err = err);
+            })?;
+            let body = str::from_utf8(&buf).map_err(|err| {
+                eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
+            })?;
+            println!("SEARCH: {body}", body = body);
+            request.respond(Response::from_string("ok")).map_err(|err| {
+                eprintln!("ERROR: could not respond to search request: {err}", err = err);
+            })?
+        },
         (Method::Get, "/index.js") => serve_static_file(request, "index.js", "text/javascript; charset=utf-8")?,
         (Method::Get, "/") | (Method::Get, "/index.html") => serve_static_file(request, "index.html", "text/html; charset=utf-8")?,
         _ => serve_404(request)?
