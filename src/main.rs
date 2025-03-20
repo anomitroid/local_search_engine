@@ -85,18 +85,6 @@ fn parse_entire_xml_file(file_path: &Path) -> Result<String, ()> {
 type TermFreq = HashMap<String, usize>;
 type TermFreqIndex = HashMap<PathBuf, TermFreq>;
 
-fn check_index(index_path: &str) -> Result<(), ()> {
-    println!("Reading {} index file...", index_path);
-    let index_file = File::open(index_path).map_err(|err| {
-        eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
-    })?;
-    let tf_index: TermFreqIndex = serde_json::from_reader(index_file).map_err(|err| {
-        eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
-    })?;
-    println!("{} index file contains {} files", index_path, tf_index.len());
-    Ok(())
-}
-
 fn save_tf_index(tf_index: &TermFreqIndex, index_path: &str) -> Result<(), ()> {
     println!("Saving {index_path}...");
     let index_file = File::create(index_path).map_err(|err| {
@@ -156,7 +144,7 @@ fn usage(program: &str) {
     eprintln!("USAGE: {program} <subcommand> [args...]", program = program);
     eprintln!("  Subcommands:");
     eprintln!("    index <dir_path>                     index all XML files in the directory and save the index to index.json");
-    eprintln!("    search <index_path>                  search the index file");
+    eprintln!("    search <index_path> <query>          search for a query within the index file");
     eprintln!("    serve <index_path> [address]         start local HTTP server with Web Interface");
 }
 
@@ -177,6 +165,20 @@ fn serve_404(request: Request) -> Result<(), ()> {
     })
 }
 
+fn search_query<'a>(tf_index: &'a TermFreqIndex, query: &'a [char]) -> Vec<(&'a Path, f32)> {
+    let mut result = Vec::<(&Path, f32)>::new();
+    let tokens = Lexer::new(&query).collect::<Vec<_>>();
+    for (path, tf_table) in tf_index {
+        let mut rank = 0f32;
+        for token in &tokens {
+            rank += tf(&token, &tf_table) * idf(&token, &tf_index);
+        }
+        result.push((path, rank));
+    }
+    result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+    result
+}
+
 fn serve_api_search(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), ()> {
     let mut buf = Vec::new();
     request.as_reader().read_to_end(&mut buf).map_err(|err| {
@@ -185,15 +187,7 @@ fn serve_api_search(tf_index: &TermFreqIndex, mut request: Request) -> Result<()
     let body = str::from_utf8(&buf).map_err(|err| {
         eprintln!("ERROR: could not interpret body as UTF-8 string: {err}", err = err);
     })?.chars().collect::<Vec<_>>();
-    let mut result = Vec::<(&Path, f32)>::new();
-    for (path, tf_table) in tf_index {
-        let mut rank = 0f32;
-        for token in Lexer::new(&body) {
-            rank += tf(&token, &tf_table) * idf(&token, &tf_index);
-        }
-        result.push((path, rank));
-    }
-    result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+    let result = search_query(tf_index, &body);
     let json = serde_json::to_string(&result.iter().take(20).collect::<Vec<_>>()).map_err(|err| {
         eprintln!("ERROR: could not convert search results to JSON: {err}", err = err);
     })?;
@@ -245,7 +239,19 @@ fn entry() -> Result<(), ()> {
                 usage(&program);
                 println!("ERROR: no index file path is provided for {} subcommand", subcommand);
             })?;
-            check_index(&index_path)?;
+            let prompt = args.next().ok_or_else(|| {
+                usage(&program);
+                println!("ERROR: no query is provided for {} subcommand", subcommand);
+            })?.chars().collect::<Vec<_>>();
+            let index_file = File::open(&index_path).map_err(|err| {
+                eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
+            })?;
+            let tf_index: TermFreqIndex = serde_json::from_reader(index_file).map_err(|err| {
+                eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
+            })?;
+            for (path, rank) in search_query(&tf_index, &prompt).iter().take(20) {
+                println!("{path} {rank}", rank = rank, path = path.display());
+            }
         },
         "serve" => {
             let index_path = args.next().ok_or_else(|| {
