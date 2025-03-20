@@ -145,9 +145,9 @@ fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), 
 fn usage(program: &str) {
     eprintln!("USAGE: {program} <subcommand> [args...]", program = program);
     eprintln!("  Subcommands:");
-    eprintln!("    index <dir_path>         index all XML files in the directory and save the index to index.json");
-    eprintln!("    search <index_path>      search the index file");
-    eprintln!("    serve [address]          start local HTTP server with Web Interface");
+    eprintln!("    index <dir_path>                     index all XML files in the directory and save the index to index.json");
+    eprintln!("    search <index_path>                  search the index file");
+    eprintln!("    serve <index_path> [address]         start local HTTP server with Web Interface");
 }
 
 fn serve_static_file(request: Request, file_path: &str, content_type: &str) -> Result<(), ()> {
@@ -167,7 +167,7 @@ fn serve_404(request: Request) -> Result<(), ()> {
     })
 }
 
-fn serve_request(mut request: Request) -> Result<(), ()> {
+fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), ()> {
     println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
     match (request.method(), request.url()) {
         (Method::Post, "/api/search") => {
@@ -212,18 +212,28 @@ fn entry() -> Result<(), ()> {
         "search" => {
             let index_path = args.next().ok_or_else(|| {
                 usage(&program);
-                println!("ERROR: no index file path is provided");
+                println!("ERROR: no index file path is provided for {} subcommand", subcommand);
             })?;
             check_index(&index_path)?;
         },
         "serve" => {
+            let index_path = args.next().ok_or_else(|| {
+                usage(&program);
+                println!("ERROR: no index file path is provided for {} subcommand", subcommand);
+            })?;
+            let index_file = File::open(&index_path).map_err(|err| {
+                eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
+            })?;
+            let tf_index: TermFreqIndex = serde_json::from_reader(index_file).map_err(|err| {
+                eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
+            })?;        
             let address = args.next().unwrap_or("127.0.0.1:6969".to_string());
             let server = Server::http(&address).map_err(|err| {
                 eprintln!("ERROR: could not start HTTP server at {address}: {err}", address = address, err = err);
             })?;
             println!("INFO: HTTP server is running at http://{address}/", address = address);
             for request in server.incoming_requests() {
-                serve_request(request)?;
+                serve_request(&tf_index, request)?;
             }
         },
         _ => {
