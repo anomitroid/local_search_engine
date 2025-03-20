@@ -197,16 +197,24 @@ fn serve_request(tf_index: &TermFreqIndex, mut request: Request) -> Result<(), (
                 result.push((path, rank));
             }
             result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
-            for (path, rank) in result.iter().take(10) {
-                println!("{path} => {rank}", path = path.display(), rank = rank);
-            }
-            request.respond(Response::from_string("ok")).map_err(|err| {
+            let json = serde_json::to_string(&result.iter().take(20).collect::<Vec<_>>()).map_err(|err| {
+                eprintln!("ERROR: could not convert search results to JSON: {err}", err = err);
+            })?;
+            let content_type_header = Header::from_bytes("Content-Type", "application/json; charset=utf-8").expect("header is fine");
+            let response = Response::from_string(json).with_header(content_type_header);
+            return request.respond(response).map_err(|err| {
                 eprintln!("ERROR: could not respond to search request: {err}", err = err);
-            })?
+            })
         },
-        (Method::Get, "/index.js") => serve_static_file(request, "index.js", "text/javascript; charset=utf-8")?,
-        (Method::Get, "/") | (Method::Get, "/index.html") => serve_static_file(request, "index.html", "text/html; charset=utf-8")?,
-        _ => serve_404(request)?
+        (Method::Get, "/index.js") => {
+            return serve_static_file(request, "index.js", "text/javascript; charset=utf-8")
+        }
+        (Method::Get, "/") | (Method::Get, "/index.html") => {
+            return serve_static_file(request, "index.html", "text/html; charset=utf-8")
+        }
+        _ => {
+            serve_404(request)?
+        }
     }
     Ok(())
 } 
@@ -252,7 +260,7 @@ fn entry() -> Result<(), ()> {
             })?;
             println!("INFO: HTTP server is running at http://{address}/", address = address);
             for request in server.incoming_requests() {
-                serve_request(&tf_index, request)?;
+                serve_request(&tf_index, request).ok();
             }
         },
         _ => {
