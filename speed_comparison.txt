@@ -29,3 +29,8 @@ df caching:
         20ms
     release:
         6ms
+df caching + tfn caching:
+    debug:
+        6ms
+    release:
+        3ms

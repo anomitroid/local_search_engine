@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
-pub type TermFreqPerDoc = HashMap<PathBuf, TermFreq>;
+pub type TermFreqPerDoc = HashMap<PathBuf, (usize, TermFreq)>;
 
 #[allow(dead_code)]
 #[derive(Default, Deserialize, Serialize)]
@@ -13,8 +13,10 @@ pub struct Model {
     pub df: DocFreq
 }
 
-pub fn compute_tf(t: &str, d: &TermFreq) -> f32 {
-    d.get(t).cloned().unwrap_or(0) as f32 / d.iter().map(|(_, f)| *f).sum::<usize>() as f32
+pub fn compute_tf(t: &str, n: usize, d: &TermFreq) -> f32 {
+    let n = n as f32;
+    let m = d.get(t).cloned().unwrap_or(0) as f32;
+    m / n
 }
 
 pub fn compute_idf(t: &str, n: usize, df: &DocFreq) -> f32 {
@@ -78,10 +80,10 @@ impl<'a> Iterator for Lexer<'a> {
 pub fn search_query<'a>(model: &'a Model, query: &'a [char]) -> Vec<(&'a Path, f32)> {
     let mut result = Vec::<(&Path, f32)>::new();
     let tokens = Lexer::new(&query).collect::<Vec<_>>();
-    for (path, tf_table) in &model.tfpd {
+    for (path, (n, tf_table)) in &model.tfpd {
         let mut rank = 0f32;
         for token in &tokens {
-            rank += compute_tf(&token, &tf_table) * compute_idf(&token, model.tfpd.len(), &model.df);
+            rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, model.tfpd.len(), &model.df);
         }
         result.push((path, rank));
     }
