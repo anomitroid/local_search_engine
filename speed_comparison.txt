@@ -19,7 +19,13 @@ buffered:
         sys     0m0.000s
 
 #Search
-debug:
-    6.99s
-release:
-    281ms
+no df caching:
+    debug:
+        6.99s
+    release:
+        281ms
+df caching:
+    debug:
+        20ms
+    release:
+        6ms
