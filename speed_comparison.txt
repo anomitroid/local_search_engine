@@ -1,0 +1,18 @@
+unbuffered:
+    release:
+        real    1m33.059s
+        user    0m0.062s
+        sys     0m0.015s
+    debug:
+        real    1m47.387s
+        user    0m0.032s
+        sys     0m0.062s
+buffered:
+    release:
+        real    0m4.456s
+        user    0m0.000s
+        sys     0m0.091s
+    debug:
+        real    0m14.519s
+        user    0m0.015s
+        sys     0m0.000s
