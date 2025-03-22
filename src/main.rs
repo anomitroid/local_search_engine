@@ -33,18 +33,18 @@ fn parse_entire_xml_file(file_path: &Path) -> Result<String, ()> {
     Ok(content)
 }
 
-fn save_tf_index(tf_index: &TermFreqIndex, index_path: &str) -> Result<(), ()> {
+fn save_model_as_json(model: &Model, index_path: &str) -> Result<(), ()> {
     println!("Saving {index_path}...");
     let index_file = File::create(index_path).map_err(|err| {
         eprintln!("ERROR: could not create index file {index_path}: {err}", index_path = index_path, err = err);
     })?;
-    serde_json::to_writer_pretty(BufWriter::new(index_file), &tf_index).map_err(|err| {
+    serde_json::to_writer_pretty(BufWriter::new(index_file), &model).map_err(|err| {
         eprintln!("ERROR: could not write index file {index_path}: {err}", index_path = index_path, err = err);
     })?;
     Ok(())
 }
 
-fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), ()> {
+fn add_folder_to_model(dir_path: &Path, model: &mut Model) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
         eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
@@ -57,7 +57,7 @@ fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), 
             eprintln!("ERROR: could not get file type of {file_path}: {err}", file_path = file_path.display(), err = err);
         })?;
         if file_type.is_dir() {
-            tf_index_of_dir(&file_path, tf_index)?;
+            add_folder_to_model(&file_path, model)?;
             continue 'next_file;
         }
         println!("Indexing {file_path:?}...", file_path = file_path);
@@ -73,7 +73,14 @@ fn tf_index_of_dir(dir_path: &Path, tf_index: &mut TermFreqIndex) -> Result<(), 
                 tf.insert(term, 1);
             }
         }
-        tf_index.insert(file_path, tf);
+        for t in tf.keys() {
+            if let Some(freq) = model.df.get_mut(t) {
+                *freq += 1;
+            } else {
+                model.df.insert(t.to_string(), 1);
+            }
+        }
+        model.tfpd.insert(file_path, tf);
     }
     Ok(())
 }
@@ -99,9 +106,9 @@ fn entry() -> Result<(), ()> {
                 usage(&program);
                 println!("ERROR: no directory path is provided");
             })?;
-            let mut tf_index = TermFreqIndex::new();
-            tf_index_of_dir(Path::new(&dir_path), &mut tf_index)?;
-            return save_tf_index(&tf_index, "index.json");
+            let mut model = Default::default();
+            add_folder_to_model(Path::new(&dir_path), &mut model)?;
+            return save_model_as_json(&model, "index.json");
         },
         "search" => {
             let index_path = args.next().ok_or_else(|| {
@@ -115,10 +122,10 @@ fn entry() -> Result<(), ()> {
             let index_file = File::open(&index_path).map_err(|err| {
                 eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
-            let tf_index: TermFreqIndex = serde_json::from_reader(index_file).map_err(|err| {
+            let model: Model = serde_json::from_reader(index_file).map_err(|err| {
                 eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
-            for (path, rank) in search_query(&tf_index, &prompt).iter().take(20) {
+            for (path, rank) in search_query(&model, &prompt).iter().take(20) {
                 println!("{path} {rank}", rank = rank, path = path.display());
             }
             return Ok(());
@@ -131,11 +138,11 @@ fn entry() -> Result<(), ()> {
             let index_file = File::open(&index_path).map_err(|err| {
                 eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
-            let tf_index: TermFreqIndex = serde_json::from_reader(index_file).map_err(|err| {
+            let model: Model = serde_json::from_reader(index_file).map_err(|err| {
                 eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
             })?;        
             let address = args.next().unwrap_or("127.0.0.1:6969".to_string());
-            return server::start(&address, &tf_index);
+            return server::start(&address, &model);
         },
         _ => {
             usage(&program);

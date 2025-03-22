@@ -1,3 +1,4 @@
+#Index
 unbuffered:
     release:
         real    1m33.059s
@@ -16,3 +17,9 @@ buffered:
         real    0m14.519s
         user    0m0.015s
         sys     0m0.000s
+
+#Search
+debug:
+    6.99s
+release:
+    281ms
