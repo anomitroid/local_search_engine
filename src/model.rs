@@ -6,7 +6,6 @@ pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
 pub type TermFreqPerDoc = HashMap<PathBuf, (usize, TermFreq)>;
 
-#[allow(dead_code)]
 #[derive(Default, Deserialize, Serialize)]
 pub struct Model {
     pub tfpd: TermFreqPerDoc,
