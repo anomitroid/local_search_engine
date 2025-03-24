@@ -12,6 +12,22 @@ pub struct InMemoryModel {
     pub df: DocFreq
 }
 
+impl InMemoryModel {
+    pub fn search_query(&self, query: &[char]) -> Vec<(&Path, f32)> {
+        let mut result = Vec::<(&Path, f32)>::new();
+        let tokens = Lexer::new(&query).collect::<Vec<_>>();
+        for (path, (n, tf_table)) in &self.tfpd {
+            let mut rank = 0f32;
+            for token in &tokens {
+                rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, self.tfpd.len(), &self.df);
+            }
+            result.push((path, rank));
+        }
+        result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+        result
+    }
+}
+
 pub fn compute_tf(t: &str, n: usize, d: &TermFreq) -> f32 {
     let n = n as f32;
     let m = d.get(t).cloned().unwrap_or(0) as f32;
@@ -74,18 +90,4 @@ impl<'a> Iterator for Lexer<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
     }
-}
-
-pub fn search_query<'a>(model: &'a InMemoryModel, query: &'a [char]) -> Vec<(&'a Path, f32)> {
-    let mut result = Vec::<(&Path, f32)>::new();
-    let tokens = Lexer::new(&query).collect::<Vec<_>>();
-    for (path, (n, tf_table)) in &model.tfpd {
-        let mut rank = 0f32;
-        for token in &tokens {
-            rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, model.tfpd.len(), &model.df);
-        }
-        result.push((path, rank));
-    }
-    result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
-    result
 }

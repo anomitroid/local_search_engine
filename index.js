@@ -10,6 +10,7 @@ async function search(prompt) {
         body: prompt
     });
     const json = await response.json();
+    console.log(json);
     results.innerHTML = '';
     for ([path, rank] of json) {
         let item = document.createElement("span");
