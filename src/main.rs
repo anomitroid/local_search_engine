@@ -33,7 +33,7 @@ fn parse_entire_xml_file(file_path: &Path) -> Result<String, ()> {
     Ok(content)
 }
 
-fn save_model_as_json(model: &Model, index_path: &str) -> Result<(), ()> {
+fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()> {
     println!("Saving {index_path}...");
     let index_file = File::create(index_path).map_err(|err| {
         eprintln!("ERROR: could not create index file {index_path}: {err}", index_path = index_path, err = err);
@@ -44,7 +44,7 @@ fn save_model_as_json(model: &Model, index_path: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn add_folder_to_model(dir_path: &Path, model: &mut Model) -> Result<(), ()> {
+fn add_folder_to_model(dir_path: &Path, model: &mut InMemoryModel) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
         eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
@@ -124,7 +124,7 @@ fn entry() -> Result<(), ()> {
             let index_file = File::open(&index_path).map_err(|err| {
                 eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
-            let model: Model = serde_json::from_reader(index_file).map_err(|err| {
+            let model: InMemoryModel = serde_json::from_reader(index_file).map_err(|err| {
                 eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
             for (path, rank) in search_query(&model, &prompt).iter().take(20) {
@@ -140,7 +140,7 @@ fn entry() -> Result<(), ()> {
             let index_file = File::open(&index_path).map_err(|err| {
                 eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
-            let model: Model = serde_json::from_reader(index_file).map_err(|err| {
+            let model: InMemoryModel = serde_json::from_reader(index_file).map_err(|err| {
                 eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
             })?;        
             let address = args.next().unwrap_or("127.0.0.1:6969".to_string());
