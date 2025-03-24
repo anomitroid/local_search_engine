@@ -45,7 +45,13 @@ fn serve_api_search(model: &InMemoryModel, mut request: Request) -> io::Result<(
             return serve_400(request, "could not parse search request body as UTF-8")
         }
     };
-    let result = model.search_query(&body);
+    let result = match model.search_query(&body) {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("ERROR: search query failed: {err:?}", err = err);
+            return serve_500(request);
+        }
+    };
     let json = match serde_json::to_string(&result.iter().take(20).collect::<Vec<_>>()) {
         Ok(json) => json,
         Err(err) => {

@@ -127,7 +127,7 @@ fn entry() -> Result<(), ()> {
             let model: InMemoryModel = serde_json::from_reader(index_file).map_err(|err| {
                 eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
             })?;
-            for (path, rank) in model.search_query(&prompt).iter().take(20) {
+            for (path, rank) in model.search_query(&prompt)?.iter().take(20) {
                 println!("{path} {rank}", rank = rank, path = path.display());
             }
             return Ok(());
