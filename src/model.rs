@@ -8,7 +8,7 @@ pub type DocFreq = HashMap<String, usize>;
 pub type TermFreqPerDoc = HashMap<PathBuf, (usize, TermFreq)>;
 
 #[derive(Default, Deserialize, Serialize)]
-pub struct InMemoryModel {
+pub struct Model {
     pub tfpd: TermFreqPerDoc,
     pub df: DocFreq
 }
@@ -91,4 +91,18 @@ impl<'a> Iterator for Lexer<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
     }
+}
+
+pub fn search_query<'a>(model: &'a Model, query: &'a [char]) -> Vec<(&'a Path, f32)> {
+    let mut result = Vec::<(&Path, f32)>::new();
+    let tokens = Lexer::new(&query).collect::<Vec<_>>();
+    for (path, (n, tf_table)) in &model.tfpd {
+        let mut rank = 0f32;
+        for token in &tokens {
+            rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, model.tfpd.len(), &model.df);
+        }
+        result.push((path, rank));
+    }
+    result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+    result
 }
