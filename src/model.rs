@@ -27,6 +27,28 @@ impl InMemoryModel {
         result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
         Ok(result)
     }
+
+    pub fn add_document(&mut self, file_path: PathBuf, content: &[char]) -> Result<(), ()> {
+        let mut tf = TermFreq::new();
+        let mut n = 0;
+        for term in Lexer::new(&content) {
+            if let Some(freq) = tf.get_mut(&term) {
+                *freq += 1;
+            } else {
+                tf.insert(term, 1);
+            }
+            n += 1;
+        }
+        for t in tf.keys() {
+            if let Some(freq) = self.df.get_mut(t) {
+                *freq += 1;
+            } else {
+                self.df.insert(t.to_string(), 1);
+            }
+        }
+        self.tfpd.insert(file_path, (n, tf));
+        Ok(())
+    }
 }
 
 pub fn compute_tf(t: &str, n: usize, d: &TermFreq) -> f32 {

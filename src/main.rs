@@ -65,24 +65,7 @@ fn add_folder_to_model(dir_path: &Path, model: &mut InMemoryModel) -> Result<(),
             Ok(content) => content.chars().collect::<Vec<_>>(),
             Err(()) => continue 'next_file,
         };
-        let mut tf = TermFreq::new();
-        let mut n = 0;
-        for term in Lexer::new(&content) {
-            if let Some(freq) = tf.get_mut(&term) {
-                *freq += 1;
-            } else {
-                tf.insert(term, 1);
-            }
-            n += 1;
-        }
-        for t in tf.keys() {
-            if let Some(freq) = model.df.get_mut(t) {
-                *freq += 1;
-            } else {
-                model.df.insert(t.to_string(), 1);
-            }
-        }
-        model.tfpd.insert(file_path, (n, tf));
+        model.add_document(file_path, &content)?;
     }
     Ok(())
 }
