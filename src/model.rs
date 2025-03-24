@@ -1,33 +1,15 @@
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use std::result::Result;
 
 pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
 pub type TermFreqPerDoc = HashMap<PathBuf, (usize, TermFreq)>;
 
-#[allow(dead_code)]
 #[derive(Default, Deserialize, Serialize)]
-pub struct Model {
+pub struct InMemoryModel {
     pub tfpd: TermFreqPerDoc,
     pub df: DocFreq
-}
-
-impl InMemoryModel {
-    pub fn search_query<'a>(&self, query: &'a [char]) -> Result<Vec<(PathBuf, f32)>, ()> {
-        let mut result = Vec::new();
-        let tokens = Lexer::new(&query).collect::<Vec<_>>();
-        for (path, (n, tf_table)) in &self.tfpd {
-            let mut rank = 0f32;
-            for token in &tokens {
-                rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, self.tfpd.len(), &self.df);
-            }
-            result.push((path.clone(), rank));
-        }
-        result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
-        Ok(result)
-    }
 }
 
 pub fn compute_tf(t: &str, n: usize, d: &TermFreq) -> f32 {
@@ -94,7 +76,7 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-pub fn search_query<'a>(model: &'a Model, query: &'a [char]) -> Vec<(&'a Path, f32)> {
+pub fn search_query<'a>(model: &'a InMemoryModel, query: &'a [char]) -> Vec<(&'a Path, f32)> {
     let mut result = Vec::<(&Path, f32)>::new();
     let tokens = Lexer::new(&query).collect::<Vec<_>>();
     for (path, (n, tf_table)) in &model.tfpd {
