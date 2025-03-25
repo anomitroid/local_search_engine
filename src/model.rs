@@ -1,7 +1,87 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
+
+pub trait Model {
+    fn add_document(&mut self, path: PathBuf, content: &[char]) -> Result<(), ()>;
+}
+
+pub struct SqliteModel {
+    connection: sqlite::Connection
+}
+
+impl SqliteModel {
+    fn execute(&self, statement: &str) -> Result<(), ()> {
+        self.connection.execute(statement).map_err(|err| {
+            eprintln!("ERROR: could not execute query {statement}: {err}");
+        })?;
+        Ok(())
+    }
+
+    pub fn begin(&self) -> Result<(), ()> {
+        self.connection.execute("BEGIN;").map_err(|err| {
+            eprintln!("ERROR: {err}")
+        })
+    } 
+
+    pub fn commit(&self) -> Result<(), ()> {
+        self.connection.execute("COMMIT;").map_err(|err| {
+            eprintln!("ERROR: {err}")
+        })
+    }
+
+    pub fn open(path: &Path) -> Result<Self, ()> {
+        let connection = sqlite::open(path).map_err(|err| {
+            eprintln!("ERROR: could not open sqlite database {path}: {err}", path = path.display());
+        })?;
+        let this = Self { connection };
+        this.execute("
+            CREATE TABLE IF NOT EXISTS Documents (
+                id INTEGER NOT NULL PRIMARY KEY,
+                path TEXT,
+                term_count INTEGER,
+                UNIQUE(path)
+            );
+        ")?;
+        this.execute("
+            CREATE TABLE IF NOT EXISTS TermFreq (
+                term TEXT,
+                doc_id INTEGER,
+                freq INTEGER,
+                UNIQUE(term, doc_id),
+                FOREIGN KEY(doc_id) REFERENCES Documents(id)
+            );
+        ")?;
+        this.execute("
+            CREATE TABLE IF NOT EXISTS DocFreq (
+                term TEXT,
+                freq INTEGER,
+                UNIQUE(term)
+            );
+        ")?;
+        Ok(this)
+    }
+}
+
+impl Model for SqliteModel {
+    fn add_document(&mut self, path: PathBuf, content: &[char]) -> Result<(), ()> {
+        let query = "INSERT INTO Documents (path, term_count) VALUES (:path, :count)";
+        let mut insert = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: Could not execute query {query}: {err}");
+        })?;
+        insert.bind((":path", path.display().to_string().as_str())).map_err(|err| {
+            eprintln!("ERROR: {err}");
+        })?;
+        insert.bind((":count", Lexer::new(content).count() as i64)).map_err(|err| {
+            eprintln!("ERROR: {err}");
+        })?;
+        insert.next().map_err(|err| {
+            eprintln!("ERROR: {err}");
+        })?;
+        Ok(())
+    }
+}
 
 pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
@@ -27,8 +107,10 @@ impl InMemoryModel {
         result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
         Ok(result)
     }
+}
 
-    pub fn add_document(&mut self, file_path: PathBuf, content: &[char]) -> Result<(), ()> {
+impl Model for InMemoryModel {
+    fn add_document(&mut self, file_path: PathBuf, content: &[char]) -> Result<(), ()> {
         let mut tf = TermFreq::new();
         let mut n = 0;
         for term in Lexer::new(&content) {

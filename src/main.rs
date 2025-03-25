@@ -44,7 +44,7 @@ fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()>
     Ok(())
 }
 
-fn add_folder_to_model(dir_path: &Path, model: &mut InMemoryModel) -> Result<(), ()> {
+fn add_folder_to_model(dir_path: &Path, model: &mut dyn Model) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
         eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
@@ -91,9 +91,11 @@ fn entry() -> Result<(), ()> {
                 usage(&program);
                 println!("ERROR: no directory path is provided");
             })?;
-            let mut model = Default::default();
+            let index_path = "index.db";
+            let mut model = SqliteModel::open(Path::new(index_path))?;
+            model.begin()?;
             add_folder_to_model(Path::new(&dir_path), &mut model)?;
-            return save_model_as_json(&model, "index.json");
+            model.commit()
         },
         "search" => {
             let index_path = args.next().ok_or_else(|| {
