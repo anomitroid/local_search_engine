@@ -132,8 +132,77 @@ impl Model for SqliteModel {
         Ok(())
     }
 
-    fn search_query(&self, _query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
-        todo!()
+    fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
+        let tokens = Lexer::new(query).collect::<Vec<_>>();
+        if tokens.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut param_names = Vec::new();
+        for i in 0..tokens.len() {
+            param_names.push(format!(":token{}", i));
+        }
+        let placeholders = param_names.join(",");
+        let total_docs = {
+            let documents_query = "SELECT COUNT(*) as count FROM Documents";
+            let mut stmt = self.connection.prepare(documents_query).map_err(|err| {
+                eprintln!("ERROR: Could not prepare total documents query {documents_query}: {err}");
+            })?;
+            let count = match stmt.next().map_err(|err| {
+                eprintln!("ERROR: Failed to execute total documents query {documents_query}: {err}");
+            })? {
+                sqlite::State::Row => stmt.read::<i64, _>("count").map_err(|err| {
+                    eprintln!("ERROR: Could not read total document count: {err}");
+                })?,
+                _ => {
+                    eprintln!("ERROR: Total documents query returned no rows");
+                    return Err(());
+                }
+            };
+            count
+        };
+        let sql = format!(
+            "
+                SELECT Documents.path as path, Documents.term_count as term_count, TermFreq.freq as tf, DocFreq.freq as df
+                FROM TermFreq
+                JOIN Documents ON Documents.id = TermFreq.doc_id
+                JOIN DocFreq ON TermFreq.term = DocFreq.term
+                WHERE TermFreq.term IN ({})
+            ", placeholders
+        );
+        let mut stmt = self.connection.prepare(sql.as_str()).map_err(|err| {
+            eprintln!("ERROR: Could not prepare such query: {err}");
+        })?;
+        for (i, token) in tokens.iter().enumerate() {
+            let param_name = format!(":token{}", i);
+            stmt.bind::<(&str, sqlite::Value)>((param_name.as_str(), token.as_str().into())).map_err(|err| {
+                eprintln!("ERROR: Could not bind parameter {} for token '{}': {err}", param_name, token, err = err);
+            })?;
+        }
+        let mut scores = HashMap::new();
+        while let sqlite::State::Row = stmt.next().map_err(|err| {
+            eprintln!("ERROR: Error executing search query: {err}");
+        })? {
+            let path_str = stmt.read::<String, _>("path").map_err(|err| {
+                eprintln!("ERROR: Could not read document path: {err}");
+            })?;
+            let term_count = stmt.read::<f64, _>("term_count").map_err(|err| {
+                eprintln!("ERROR: Could not read document term_count: {err}");
+            })?;
+            let tf = stmt.read::<f64, _>("tf").map_err(|err| {
+                eprintln!("ERROR: Could not read document term frequency: {err}");
+            })?;
+            let df = stmt.read::<f64, _>("df").map_err(|err| {
+                eprintln!("ERROR: Could not read document frequncy: {err}");
+            })?;
+            let tf_ratio = (tf as f64) / (term_count as f64);
+            let idf = ((total_docs as f64) / ((df as f64).max(1.0) as f64)).log10();
+            let score = tf_ratio * idf;
+            let path: PathBuf = PathBuf::from(path_str);
+            *scores.entry(path).or_insert(0.0) += score;
+        }
+        let mut results = scores.into_iter().map(|(path, score)| (path, score as f32)).collect::<Vec<(_, _)>>();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        Ok(results)
     }
 }
 
