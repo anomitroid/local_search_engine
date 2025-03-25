@@ -5,6 +5,7 @@ use std::result::Result;
 
 pub trait Model {
     fn add_document(&mut self, path: PathBuf, content: &[char]) -> Result<(), ()>;
+    fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()>;
 }
 
 pub struct SqliteModel {
@@ -78,35 +79,61 @@ impl Model for SqliteModel {
                 sqlite3_sys::sqlite3_last_insert_rowid(self.connection.as_raw())
             }
         };
-        for term in &terms {
-            let freq = {
-                let query = "SELECT freq from TermFreq WHERE doc_id = :doc_id AND term = :term";
+        let mut tf = TermFreq::new();
+        for term in Lexer::new(content) {
+            if let Some(freq) = tf.get_mut(&term) {
+                *freq += 1;
+            }
+            else {
+                tf.insert(term, 1);
+            }
+        }
+        for (term, freq) in &tf {
+            {
+                let query = "INSERT INTO TermFreq(doc_id, term, freq) VALUES(:doc_id, :term, :freq)";
                 let log_err = |err| {
                     eprintln!("ERROR: Could not execute query {query}: {err}");
                 };
                 let mut stmt = self.connection.prepare(query).map_err(log_err)?;
                 stmt.bind_iter::<_, (_, sqlite::Value)>([
                     (":doc_id", doc_id.into()),
-                    (":term", term.as_str().into())
+                    (":term", term.as_str().into()),
+                    (":freq", (*freq as i64).into())
                 ]).map_err(log_err)?;
-                match stmt.next().map_err(log_err)? {
-                    sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(log_err)?,
-                    sqlite::State::Done => 0
-                }
-            };
-            let query = "INSERT OR REPLACE INTO TermFreq(doc_id, term, freq) VALUES(:doc_id, :term, :freq)";
-            let log_err = |err| {
-                eprintln!("ERROR: Could not execute query {query}: {err}");
-            };
-            let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-            stmt.bind_iter::<_, (_, sqlite::Value)>([
-                (":doc_id", doc_id.into()),
-                (":term", term.as_str().into()),
-                (":freq", (freq + 1).into()),
-            ]).map_err(log_err)?;
-            stmt.next().map_err(log_err)?;
+                stmt.next().map_err(log_err)?;
+            }
+            {
+                let freq = {
+                    let query = "SELECT freq from DocFreq WHERE term = :term";
+                    let log_err = |err| {
+                        eprintln!("ERROR: Could not execute query {query}: {err}");
+                    };
+                    let mut stmt = self.connection.prepare(query).map_err(log_err)?;
+                    stmt.bind_iter::<_, (_, sqlite::Value)>([
+                        (":term", term.as_str().into())
+                    ]).map_err(log_err)?;
+                    match stmt.next().map_err(log_err)? {
+                        sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(log_err)?,
+                        sqlite::State::Done => 0
+                    }
+                };
+                let query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
+                let log_err = |err| {
+                    eprintln!("ERROR: Could not execute query {query}: {err}");
+                };
+                let mut stmt = self.connection.prepare(query).map_err(log_err)?;
+                stmt.bind_iter::<_, (_, sqlite::Value)>([
+                    (":term", term.as_str().into()),
+                    (":freq", (freq + 1).into()),
+                ]).map_err(log_err)?;
+                stmt.next().map_err(log_err)?;
+            }
         }
         Ok(())
+    }
+
+    fn search_query(&self, _query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
+        todo!()
     }
 }
 
@@ -118,22 +145,6 @@ pub type TermFreqPerDoc = HashMap<PathBuf, (usize, TermFreq)>;
 pub struct InMemoryModel {
     pub tfpd: TermFreqPerDoc,
     pub df: DocFreq
-}
-
-impl InMemoryModel {
-    pub fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
-        let mut result = Vec::new();
-        let tokens = Lexer::new(&query).collect::<Vec<_>>();
-        for (path, (n, tf_table)) in &self.tfpd {
-            let mut rank = 0f32;
-            for token in &tokens {
-                rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, self.tfpd.len(), &self.df);
-            }
-            result.push((path.clone(), rank));
-        }
-        result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
-        Ok(result)
-    }
 }
 
 impl Model for InMemoryModel {
@@ -157,6 +168,20 @@ impl Model for InMemoryModel {
         }
         self.tfpd.insert(file_path, (n, tf));
         Ok(())
+    }
+
+    fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
+        let mut result = Vec::new();
+        let tokens = Lexer::new(&query).collect::<Vec<_>>();
+        for (path, (n, tf_table)) in &self.tfpd {
+            let mut rank = 0f32;
+            for token in &tokens {
+                rank += compute_tf(&token, *n, &tf_table) * compute_idf(&token, self.tfpd.len(), &self.df);
+            }
+            result.push((path.clone(), rank));
+        }
+        result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
+        Ok(result)
     }
 }
 
