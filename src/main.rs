@@ -13,6 +13,12 @@ mod model;
 use model::*;
 mod server;
 
+fn parse_entire_txt_file(file_path: &Path) -> Result<String, ()> {
+    fs::read_to_string(file_path).map_err(|err| {
+        eprintln!("ERROR: could not open file {file_path}: {err}", file_path = file_path.display());
+    })
+}
+
 fn parse_entire_xml_file(file_path: &Path) -> Result<String, ()> {
     let file = File::open(file_path).map_err(|err| {
         eprintln!("ERROR: could not open file {file_path}: {err}", file_path = file_path.display(), err = err);
@@ -33,7 +39,20 @@ fn parse_entire_xml_file(file_path: &Path) -> Result<String, ()> {
     Ok(content)
 }
 
-#[allow(dead_code)]
+fn parse_entire_file_by_extension(file_path: &Path) -> Result<String, ()> {
+    let extension = file_path.extension().ok_or_else(|| {
+        eprintln!("ERROR: cannot detect file type of {file_path} without extension", file_path = file_path.display());
+    })?.to_string_lossy();
+    match extension.as_ref() {
+        "xhtml" | "xml" | "html" => parse_entire_xml_file(file_path),
+        "txt" | "md" => parse_entire_txt_file(file_path),
+        _ => {
+            eprintln!("ERROR: cannot detect file type of {file_path}: unsupported extension {extension}", file_path = file_path.display(), extension = extension);
+            Err(())
+        }
+    }
+}
+
 fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()> {
     println!("Saving {index_path}...");
     let index_file = File::create(index_path).map_err(|err| {
@@ -62,7 +81,7 @@ fn add_folder_to_model(dir_path: &Path, model: &mut dyn Model) -> Result<(), ()>
             continue 'next_file;
         }
         println!("Indexing {file_path:?}...", file_path = file_path);
-        let content = match parse_entire_xml_file(&file_path) {
+        let content = match parse_entire_file_by_extension(&file_path) {
             Ok(content) => content.chars().collect::<Vec<_>>(),
             Err(()) => continue 'next_file,
         };
