@@ -12,7 +12,7 @@ async function search(prompt) {
     const json = await response.json();
     console.log(json);
     results.innerHTML = '';
-    for ([path, rank] of json) {
+    for (let [path, rank] of json) {
         let item = document.createElement("span");
         item.appendChild(document.createTextNode(path));
         item.appendChild(document.createElement("br"));
@@ -23,8 +23,6 @@ async function search(prompt) {
 let query = document.getElementById('query');
 let currentSearch = Promise.resolve();
 
-query.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        currentSearch.then(() => search(query.value));
-    }
+query.addEventListener('input', () => {
+    currentSearch = currentSearch.then(() => search(query.value));
 });
