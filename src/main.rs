@@ -64,7 +64,7 @@ fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()>
     Ok(())
 }
 
-fn add_folder_to_model(dir_path: &Path, model: &mut dyn Model) -> Result<(), ()> {
+fn add_folder_to_model(dir_path: &Path, model: &mut dyn Model, skipped: &mut usize) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
         eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
@@ -77,13 +77,16 @@ fn add_folder_to_model(dir_path: &Path, model: &mut dyn Model) -> Result<(), ()>
             eprintln!("ERROR: could not get file type of {file_path}: {err}", file_path = file_path.display(), err = err);
         })?;
         if file_type.is_dir() {
-            add_folder_to_model(&file_path, model)?;
+            add_folder_to_model(&file_path, model, skipped)?;
             continue 'next_file;
         }
         println!("Indexing {file_path:?}...", file_path = file_path);
         let content = match parse_entire_file_by_extension(&file_path) {
             Ok(content) => content.chars().collect::<Vec<_>>(),
-            Err(()) => continue 'next_file,
+            Err(()) => {
+                *skipped += 1;
+                continue 'next_file;
+            }
         };
         model.add_document(file_path, &content)?;
     }
@@ -122,6 +125,7 @@ fn entry() -> Result<(), ()> {
                 usage(&program);
                 println!("ERROR: no directory path is provided");
             })?;
+            let mut skipped = 0;
             if use_sqlite_mode {                
                 let index_path = "index.db";
                 if let Err(err) = fs::remove_file(index_path) {
@@ -132,15 +136,17 @@ fn entry() -> Result<(), ()> {
                 }
                 let mut model = SqliteModel::open(Path::new(index_path))?;
                 model.begin()?;
-                add_folder_to_model(Path::new(&dir_path), &mut model)?;
-                model.commit()
+                add_folder_to_model(Path::new(&dir_path), &mut model, &mut skipped)?;
+                model.commit()?;
             }
             else {
                 let index_path = "index.json";
                 let mut model = Default::default();
-                add_folder_to_model(Path::new(&dir_path), &mut model)?;
-                save_model_as_json(&model, index_path)
+                add_folder_to_model(Path::new(&dir_path), &mut model, &mut skipped)?;
+                save_model_as_json(&model, index_path)?;
             }
+            println!("Skipped {skipped} files.");
+            Ok(())
         },
         "search" => {
             let index_path = args.next().ok_or_else(|| {
