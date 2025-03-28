@@ -1,6 +1,7 @@
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use std::fs::File;
 use std::{io, str};
+use std::sync::{Arc, Mutex};
 
 use super::model::*;
 
@@ -32,7 +33,7 @@ fn serve_static_file(request: Request, file_path: &str, content_type: &str) -> i
     request.respond(response)
 }
 
-fn serve_api_search(model: &impl Model, mut request: Request) -> io::Result<()> {
+fn serve_api_search(model: Arc<Mutex<InMemoryModel>>, mut request: Request) -> io::Result<()> {
     let mut buf = Vec::new();
     if let Err(err) = request.as_reader().read_to_end(&mut buf) {
         eprintln!("ERROR: could not read search request body: {err}", err = err);
@@ -45,6 +46,7 @@ fn serve_api_search(model: &impl Model, mut request: Request) -> io::Result<()> 
             return serve_400(request, "could not parse search request body as UTF-8")
         }
     };
+    let model = model.lock().unwrap();
     let result = match model.search_query(&body) {
         Ok(result) => result,
         Err(err) => {
@@ -64,7 +66,7 @@ fn serve_api_search(model: &impl Model, mut request: Request) -> io::Result<()> 
     return request.respond(response)
 }
 
-fn serve_request(model: &impl Model, request: Request) -> io::Result<()> {
+fn serve_request(model: Arc<Mutex<InMemoryModel>>, request: Request) -> io::Result<()> {
     println!("INFO: Received request! method: {:?}, url: {:?}", request.method(), request.url());
     match (request.method(), request.url()) {
         (Method::Post, "/api/search") => {
@@ -82,13 +84,15 @@ fn serve_request(model: &impl Model, request: Request) -> io::Result<()> {
     }
 } 
 
-pub fn start(address: &str, model: &impl Model) -> Result<(), ()> {
+pub fn start(address: &str, model: Arc<Mutex<InMemoryModel>>) -> Result<(), ()> {
     let server = Server::http(&address).map_err(|err| {
         eprintln!("ERROR: could not start HTTP server at {address}: {err}", address = address, err = err);
     })?;
     println!("INFO: HTTP server is running at http://{address}/", address = address);
     for request in server.incoming_requests() {
-        serve_request(model, request).ok();
+        serve_request(Arc::clone(&model), request).map_err(|err| {
+            eprintln!("ERROR: could not serve the response: {err}");
+        }).ok();
     }
     eprintln!("ERROR: HTTP server stopped unexpectedly");
     Err(())
