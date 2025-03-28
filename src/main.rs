@@ -68,7 +68,7 @@ fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()>
     Ok(())
 }
 
-fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<InMemoryModel>>, skipped: &mut usize) -> Result<(), ()> {
+fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>, skipped: &mut usize) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
         eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
@@ -136,38 +136,54 @@ fn entry() -> Result<(), ()> {
     })?;
     match subcommand.as_str() {
         "serve" => {
-            assert!(!use_sqlite_mode);
             let dir_path = args.next().ok_or_else(|| {
                 usage(&program);
                 println!("ERROR: no directory path is provided for {subcommand} subcommand");
             })?;
-            let index_path = "index.json";
             let address = args.next().unwrap_or("127.0.0.1:6969".to_string());
-            let exists = Path::new(index_path).try_exists().map_err(|err| {
-                eprintln!("ERROR: could not check the existence of file {index_path}: {err}");
-            })?;
-            let model: Arc<Mutex<InMemoryModel>>;
-            if exists {
-                let index_file = File::open(&index_path).map_err(|err| {
-                    eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path, err = err);
+            if use_sqlite_mode {
+                let index_path = "index.db";
+                let sqlite_model = SqliteModel::open(Path::new(&index_path)).map_err(|err| {
+                    eprintln!("ERROR: could not open sqlite database {}: {err:?}", index_path);
                 })?;
-                model = Arc::new(Mutex::new(serde_json::from_reader(index_file).map_err(|err| {
-                    eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path, err = err);
-                })?));        
+                let model: Arc<Mutex<Box<dyn Model + Send>>> = Arc::new(Mutex::new(Box::new(sqlite_model)));
+                {
+                    let model_clone = Arc::clone(&model);
+                    thread::spawn(move || {
+                        let mut skipped = 0;
+                        add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped).unwrap();
+                    });
+                }
+                server::start(&address, Arc::clone(&model))
+            } else {
+                let index_path = "index.json";
+                let exists = Path::new(index_path).try_exists().map_err(|err| {
+                    eprintln!("ERROR: could not check the existence of file {}: {}", index_path, err);
+                })?;                
+                let model: Box<dyn Model + Send> = if exists {
+                    let index_file = File::open(&index_path).map_err(|err| {
+                        eprintln!("ERROR: could not open index file {}: {}", index_path, err);
+                    })?;
+                    Box::new(serde_json::from_reader::<_, InMemoryModel>(index_file).map_err(|err| {
+                        eprintln!("ERROR: could not parse index file {}: {}", index_path, err);
+                    })?)
+                } else {
+                    Box::new(InMemoryModel::default())
+                };
+                let model = Arc::new(Mutex::new(model));
+                {
+                    let model_clone = Arc::clone(&model);
+                    thread::spawn(move || {
+                        let mut skipped = 0;
+                        add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped).unwrap();
+                        let model_guard = model_clone.lock().unwrap();
+                        let in_memory = model_guard.as_any().downcast_ref::<InMemoryModel>()
+                            .expect("Expected an InMemoryModel");
+                        save_model_as_json(in_memory, index_path).unwrap();
+                    });
+                }
+                server::start(&address, Arc::clone(&model))
             }
-            else {
-                model = Arc::new(Mutex::new(Default::default()));
-            }
-            {
-                let model = Arc::clone(&model);
-                thread::spawn(move || {
-                    let mut skipped = 0;
-                    add_folder_to_model(Path::new(&dir_path), Arc::clone(&model), &mut skipped).unwrap();
-                    let model = model.lock().unwrap();
-                    save_model_as_json(&model, index_path).unwrap();
-                });
-            }
-            server::start(&address, Arc::clone(&model))
         },
         _ => {
             usage(&program);

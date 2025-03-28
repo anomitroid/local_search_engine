@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
+use std::any::Any;
 
 use super::lexer::Lexer;
 
-pub trait Model {
+pub trait Model: Send + Any {
+    fn as_any(&self) -> &dyn Any;
     fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()>;
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()>;
     fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()>;
@@ -66,6 +68,9 @@ impl SqliteModel {
 }
 
 impl Model for SqliteModel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
     fn add_document(&mut self, path: PathBuf, _last_modifier: SystemTime, content: &[char]) -> Result<(), ()> {
         let terms = Lexer::new(content).collect::<Vec<_>>();
         let doc_id = {
@@ -245,6 +250,9 @@ impl InMemoryModel {
 }
 
 impl Model for InMemoryModel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
     fn add_document(&mut self, file_path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
         self.remove_document(&file_path);
         let mut tf = TermFreq::new();
