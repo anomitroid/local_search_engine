@@ -1,13 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 
 use super::lexer::Lexer;
 
 pub trait Model {
-    fn add_document(&mut self, path: PathBuf, content: &[char]) -> Result<(), ()>;
+    fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()>;
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()>;
+    fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()>;
 }
 
 pub struct SqliteModel {
@@ -64,7 +66,7 @@ impl SqliteModel {
 }
 
 impl Model for SqliteModel {
-    fn add_document(&mut self, path: PathBuf, content: &[char]) -> Result<(), ()> {
+    fn add_document(&mut self, path: PathBuf, _last_modifier: SystemTime, content: &[char]) -> Result<(), ()> {
         let terms = Lexer::new(content).collect::<Vec<_>>();
         let doc_id = {
             let query = "INSERT INTO Documents (path, term_count) VALUES (:path, :count)";
@@ -206,15 +208,20 @@ impl Model for SqliteModel {
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         Ok(results)
     }
+
+    fn requires_reindexing(&mut self, _path: &Path, _last_modified: SystemTime) -> Result<bool, ()> {
+        Ok(true)
+    }
 }
 
 pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 struct Doc {
     tf: TermFreq,
-    count: usize
+    count: usize,
+    last_modified: SystemTime
 }
 
 type Docs = HashMap<PathBuf, Doc>;
@@ -225,26 +232,39 @@ pub struct InMemoryModel {
     df: DocFreq
 }
 
+impl InMemoryModel {
+    fn remove_document(&mut self, file_path: &Path) {
+        if let Some(doc) = self.docs.remove(file_path) {
+            for t in doc.tf.keys() {
+                if let Some(f) = self.df.get_mut(t) {
+                    *f -= 1;
+                }
+            }
+        }
+    }
+}
+
 impl Model for InMemoryModel {
-    fn add_document(&mut self, file_path: PathBuf, content: &[char]) -> Result<(), ()> {
+    fn add_document(&mut self, file_path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
+        self.remove_document(&file_path);
         let mut tf = TermFreq::new();
         let mut count = 0;
-        for term in Lexer::new(&content) {
-            if let Some(freq) = tf.get_mut(&term) {
-                *freq += 1;
+        for t in Lexer::new(&content) {
+            if let Some(f) = tf.get_mut(&t) {
+                *f += 1;
             } else {
-                tf.insert(term, 1);
+                tf.insert(t, 1);
             }
             count += 1;
         }
         for t in tf.keys() {
-            if let Some(freq) = self.df.get_mut(t) {
-                *freq += 1;
+            if let Some(f) = self.df.get_mut(t) {
+                *f += 1;
             } else {
                 self.df.insert(t.to_string(), 1);
             }
         }
-        self.docs.insert(file_path, Doc {count, tf});
+        self.docs.insert(file_path, Doc {count, tf, last_modified});
         Ok(())
     }
 
@@ -260,6 +280,13 @@ impl Model for InMemoryModel {
         }
         result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).unwrap().reverse());
         Ok(result)
+    }
+
+    fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()> {
+        if let Some(doc) = self.docs.get(file_path) {
+            return Ok(doc.last_modified < last_modified);
+        }
+        return Ok(true);
     }
 }
 
