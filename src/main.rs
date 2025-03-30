@@ -68,7 +68,7 @@ fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()>
     Ok(())
 }
 
-fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>, skipped: &mut usize) -> Result<(), ()> {
+fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>, skipped: &mut usize, processed: &mut usize) -> Result<(), ()> {
     let dir = fs::read_dir(dir_path).map_err(|err| {
         eprintln!("ERROR: could not read directory {dir_path}: {err}", dir_path = dir_path.display(), err = err);
     })?;
@@ -87,7 +87,7 @@ fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>
         })?;
 
         if file_type.is_dir() {
-            add_folder_to_model(&file_path, Arc::clone(&model), skipped)?;
+            add_folder_to_model(&file_path, Arc::clone(&model), skipped, processed)?;
             continue 'next_file;
         }
         let mut model = model.lock().unwrap();
@@ -101,6 +101,7 @@ fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>
                 }
             };
             model.add_document(file_path, last_modified, &content)?;
+            *processed += 1;
         }
         else {
             println!("Ignoring {file_path} because we have already indexed it.", file_path = file_path.display());
@@ -151,8 +152,14 @@ fn entry() -> Result<(), ()> {
                     let model_clone = Arc::clone(&model);
                     thread::spawn(move || {
                         let mut skipped = 0;
-                        add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped).unwrap();
-                        println!("Indexing complete for SQLite mode. {} files were skipped.", skipped);
+                        let mut processed = 0;
+                        add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped, &mut processed).unwrap();
+                        if processed != 0 {
+                            println!("Indexing complete for SQLite mode. Processed: {} files, Skipped: {} files.", processed, skipped);
+                        }
+                        else {
+                            println!("No new files processed; index file remains unchanged.");
+                        }
                     });
                 }
                 server::start(&address, Arc::clone(&model))
@@ -178,12 +185,17 @@ fn entry() -> Result<(), ()> {
                     let model_clone = Arc::clone(&model);
                     thread::spawn(move || {
                         let mut skipped = 0;
-                        add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped).unwrap();
-                        println!("{skipped} files were skipped.");
-                        let model_guard = model_clone.lock().unwrap();
-                        let in_memory = model_guard.as_any().downcast_ref::<InMemoryModel>()
-                            .expect("Expected an InMemoryModel");
-                        save_model_as_json(in_memory, index_path).unwrap();
+                        let mut processed = 0;
+                        add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped, &mut processed).unwrap();
+                        if processed != 0 {
+                            let model_guard = model_clone.lock().unwrap();
+                            let in_memory = model_guard.as_any().downcast_ref::<InMemoryModel>().expect("Expected an InMemoryModel");
+                            save_model_as_json(in_memory, index_path).unwrap();
+                            println!("Indexing complete. Processed: {} files, Skipped: {} files.", processed, skipped);
+                        }
+                        else {
+                            println!("No new files processed; index file remains unchanged.");
+                        }
                     });
                 }
                 server::start(&address, Arc::clone(&model))
