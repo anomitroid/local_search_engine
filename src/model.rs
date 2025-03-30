@@ -10,6 +10,7 @@ use super::lexer::Lexer;
 pub trait Model: Send + Any {
     fn as_any(&self) -> &dyn Any;
     fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()>;
+    fn remove_document(&mut self, file_path: &std::path::Path) -> Result<(), ()>;
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()>;
     fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()>;
 }
@@ -67,6 +68,25 @@ impl SqliteModel {
         Ok(this)
     }
     
+    fn execute_with_binding(&self, query: &str, bindings: &[(&str, sqlite::Value)]) -> Result<(), ()> {
+        let mut stmt = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: could not prepare query {}: {}", query, err);
+        })?;
+        stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+            eprintln!("ERROR: could not bind parameters for query {}: {}", query, err);
+        })?;
+        stmt.next().map_err(|err| {
+            eprintln!("ERROR: could not execute query {}: {}", query, err);
+        })?;
+        Ok(())
+    }
+}
+
+impl Model for SqliteModel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn remove_document(&mut self, file_path: &std::path::Path) -> Result<(), ()> {
         let query = "SELECT id FROM Documents WHERE path = :path";
         let mut stmt = self.connection.prepare(query).map_err(|err| {
@@ -143,25 +163,6 @@ impl SqliteModel {
             })?;
         }
         Ok(())
-    }
-
-    fn execute_with_binding(&self, query: &str, bindings: &[(&str, sqlite::Value)]) -> Result<(), ()> {
-        let mut stmt = self.connection.prepare(query).map_err(|err| {
-            eprintln!("ERROR: could not prepare query {}: {}", query, err);
-        })?;
-        stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
-            eprintln!("ERROR: could not bind parameters for query {}: {}", query, err);
-        })?;
-        stmt.next().map_err(|err| {
-            eprintln!("ERROR: could not execute query {}: {}", query, err);
-        })?;
-        Ok(())
-    }
-}
-
-impl Model for SqliteModel {
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
@@ -357,8 +358,12 @@ pub struct InMemoryModel {
     df: DocFreq
 }
 
-impl InMemoryModel {
-    fn remove_document(&mut self, file_path: &Path) {
+impl Model for InMemoryModel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn remove_document(&mut self, file_path: &Path) -> Result<(), ()>{
         if let Some(doc) = self.docs.remove(file_path) {
             for t in doc.tf.keys() {
                 if let Some(f) = self.df.get_mut(t) {
@@ -366,15 +371,11 @@ impl InMemoryModel {
                 }
             }
         }
+        Ok(())
     }
-}
 
-impl Model for InMemoryModel {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn add_document(&mut self, file_path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
-        self.remove_document(&file_path);
+        self.remove_document(&file_path)?;
         let mut tf = TermFreq::new();
         let mut count = 0;
         for t in Lexer::new(&content) {
