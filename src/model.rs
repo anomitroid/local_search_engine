@@ -36,7 +36,7 @@ impl SqliteModel {
 
     pub fn open(path: &Path) -> Result<Self, ()> {
         let connection = sqlite::open(path).map_err(|err| {
-            eprintln!("ERROR: could not open sqlite database {path}: {err}", path = path.display());
+            eprintln!("ERROR: could not open sqlite database {}: {}", path.display(), err);
         })?;
         let this = Self { connection };
         this.execute("
@@ -44,6 +44,7 @@ impl SqliteModel {
                 id INTEGER NOT NULL PRIMARY KEY,
                 path TEXT,
                 term_count INTEGER,
+                last_modified INTEGER,
                 UNIQUE(path)
             );
         ")?;
@@ -65,79 +66,175 @@ impl SqliteModel {
         ")?;
         Ok(this)
     }
+    
+    fn remove_document(&mut self, file_path: &std::path::Path) -> Result<(), ()> {
+        let query = "SELECT id FROM Documents WHERE path = :path";
+        let mut stmt = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: Could not prepare query {}: {}", query, err);
+        })?;
+        let bindings: Vec<(&str, sqlite::Value)> = vec![
+            (":path", sqlite::Value::String(file_path.display().to_string()))
+        ];
+        stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+            eprintln!("ERROR: Could not bind path for document removal: {}", err);
+        })?;
+        let doc_id: i64 = match stmt.next().map_err(|err| {
+            eprintln!("ERROR: Could not execute query {}: {}", query, err);
+        })? {
+            sqlite::State::Row => stmt.read("id").map_err(|err| {
+                eprintln!("ERROR: Could not read document id: {}", err);
+            })?,
+            sqlite::State::Done => {
+                return Ok(());
+            }
+        };
+        let term_query = "SELECT term FROM TermFreq WHERE doc_id = :doc_id";
+        let mut term_stmt = self.connection.prepare(term_query).map_err(|err| {
+            eprintln!("ERROR: Could not prepare query {}: {}", term_query, err);
+        })?;
+        let term_bindings: Vec<(&str, sqlite::Value)> = vec![
+            (":doc_id", sqlite::Value::Integer(doc_id))
+        ];
+        term_stmt.bind_iter(term_bindings.iter().cloned()).map_err(|err| {
+            eprintln!("ERROR: Could not bind doc_id for term lookup: {}", err);
+        })?;
+        while let sqlite::State::Row = term_stmt.next().map_err(|err| {
+            eprintln!("ERROR: Could not execute query {}: {}", term_query, err);
+        })? {
+            let term: String = term_stmt.read("term").map_err(|err| {
+                eprintln!("ERROR: Could not read term from TermFreq: {}", err);
+            })?;
+            let update_query = "UPDATE DocFreq SET freq = freq - 1 WHERE term = :term";
+            self.execute_with_binding(
+                update_query, 
+                &[
+                    (":term", sqlite::Value::String(term.clone()))
+                ]
+            )?;
+        }
+        let delete_termfreq = "DELETE FROM TermFreq WHERE doc_id = :doc_id";
+        {
+            let mut stmt = self.connection.prepare(delete_termfreq).map_err(|err| {
+                eprintln!("ERROR: Could not prepare query {}: {}", delete_termfreq, err);
+            })?;
+            let del_bindings: Vec<(&str, sqlite::Value)> = vec![
+                (":doc_id", sqlite::Value::Integer(doc_id))
+            ];
+            stmt.bind_iter(del_bindings.iter().cloned()).map_err(|err| {
+                eprintln!("ERROR: Could not bind doc_id for TermFreq deletion: {}", err);
+            })?;
+            stmt.next().map_err(|err| {
+                eprintln!("ERROR: Could not execute query {}: {}", delete_termfreq, err);
+            })?;
+        }
+        let delete_doc = "DELETE FROM Documents WHERE id = :doc_id";
+        {
+            let mut stmt = self.connection.prepare(delete_doc).map_err(|err| {
+                eprintln!("ERROR: Could not prepare query {}: {}", delete_doc, err);
+            })?;
+            let del_doc_bindings: Vec<(&str, sqlite::Value)> = vec![
+                (":doc_id", sqlite::Value::Integer(doc_id))
+            ];
+            stmt.bind_iter(del_doc_bindings.iter().cloned()).map_err(|err| {
+                eprintln!("ERROR: Could not bind doc_id for Documents deletion: {}", err);
+            })?;
+            stmt.next().map_err(|err| {
+                eprintln!("ERROR: Could not execute query {}: {}", delete_doc, err);
+            })?;
+        }
+        Ok(())
+    }
+
+    fn execute_with_binding(&self, query: &str, bindings: &[(&str, sqlite::Value)]) -> Result<(), ()> {
+        let mut stmt = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: could not prepare query {}: {}", query, err);
+        })?;
+        stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+            eprintln!("ERROR: could not bind parameters for query {}: {}", query, err);
+        })?;
+        stmt.next().map_err(|err| {
+            eprintln!("ERROR: could not execute query {}: {}", query, err);
+        })?;
+        Ok(())
+    }
 }
 
 impl Model for SqliteModel {
     fn as_any(&self) -> &dyn Any {
         self
     }
-    fn add_document(&mut self, path: PathBuf, _last_modifier: SystemTime, content: &[char]) -> Result<(), ()> {
+
+    fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
+        self.begin()?;
+        self.remove_document(&path)?;
         let terms = Lexer::new(content).collect::<Vec<_>>();
+        let lm_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
         let doc_id = {
-            let query = "INSERT INTO Documents (path, term_count) VALUES (:path, :count)";
+            let query = "INSERT INTO Documents (path, term_count, last_modified) VALUES (:path, :count, :last_modified)";
             let log_err = |err| {
-                eprintln!("ERROR: Could not execute query {query}: {err}");
+                eprintln!("ERROR: Could not execute query {}: {}", query, err);
             };
             let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-            stmt.bind_iter::<_, (_, sqlite::Value)>([
-                (":path", path.display().to_string().as_str().into()),
-                (":count", (terms.len() as i64).into())
-            ]).map_err(log_err)?;
+            let bindings: Vec<(&str, sqlite::Value)> = vec![
+                (":path", sqlite::Value::String(path.display().to_string())),
+                (":count", sqlite::Value::Integer(terms.len() as i64)),
+                (":last_modified", sqlite::Value::Integer(lm_ts)),
+            ];
+            stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
             stmt.next().map_err(log_err)?;
             unsafe {
                 sqlite3_sys::sqlite3_last_insert_rowid(self.connection.as_raw())
             }
-        };
+        };        
         let mut tf = TermFreq::new();
         for term in Lexer::new(content) {
-            if let Some(freq) = tf.get_mut(&term) {
-                *freq += 1;
-            }
-            else {
-                tf.insert(term, 1);
-            }
+            *tf.entry(term).or_insert(0) += 1;
         }
         for (term, freq) in &tf {
             {
                 let query = "INSERT INTO TermFreq(doc_id, term, freq) VALUES(:doc_id, :term, :freq)";
                 let log_err = |err| {
-                    eprintln!("ERROR: Could not execute query {query}: {err}");
+                    eprintln!("ERROR: Could not execute query {}: {}", query, err);
                 };
                 let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-                stmt.bind_iter::<_, (_, sqlite::Value)>([
-                    (":doc_id", doc_id.into()),
-                    (":term", term.as_str().into()),
-                    (":freq", (*freq as i64).into())
-                ]).map_err(log_err)?;
+                let bindings: Vec<(&str, sqlite::Value)> = vec![
+                    (":doc_id", sqlite::Value::Integer(doc_id)),
+                    (":term", sqlite::Value::String(term.as_str().to_string())),
+                    (":freq", sqlite::Value::Integer(*freq as i64))
+                ];
+                stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
                 stmt.next().map_err(log_err)?;
             }
             {
-                let freq = {
-                    let query = "SELECT freq from DocFreq WHERE term = :term";
+                let current_freq = {
+                    let query = "SELECT freq FROM DocFreq WHERE term = :term";
                     let log_err = |err| {
-                        eprintln!("ERROR: Could not execute query {query}: {err}");
+                        eprintln!("ERROR: Could not execute query {}: {}", query, err);
                     };
                     let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-                    stmt.bind_iter::<_, (_, sqlite::Value)>([
-                        (":term", term.as_str().into())
-                    ]).map_err(log_err)?;
+                    let bindings: Vec<(&str, sqlite::Value)> = vec![
+                        (":term", sqlite::Value::String(term.as_str().to_string()))
+                    ];
+                    stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
                     match stmt.next().map_err(log_err)? {
                         sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(log_err)?,
-                        sqlite::State::Done => 0
+                        sqlite::State::Done => 0,
                     }
                 };
-                let query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
+                let update_query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
                 let log_err = |err| {
-                    eprintln!("ERROR: Could not execute query {query}: {err}");
+                    eprintln!("ERROR: Could not execute query {}: {}", update_query, err);
                 };
-                let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-                stmt.bind_iter::<_, (_, sqlite::Value)>([
-                    (":term", term.as_str().into()),
-                    (":freq", (freq + 1).into()),
-                ]).map_err(log_err)?;
+                let mut stmt = self.connection.prepare(update_query).map_err(log_err)?;
+                let bindings: Vec<(&str, sqlite::Value)> = vec![
+                    (":term", sqlite::Value::String(term.as_str().to_string())),
+                    (":freq", sqlite::Value::Integer(current_freq + 1))
+                ];
+                stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
                 stmt.next().map_err(log_err)?;
             }
         }
+        self.commit()?;
         Ok(())
     }
 
@@ -214,8 +311,31 @@ impl Model for SqliteModel {
         Ok(results)
     }
 
-    fn requires_reindexing(&mut self, _path: &Path, _last_modified: SystemTime) -> Result<bool, ()> {
-        Ok(true)
+    fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()> {
+        let new_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
+        let query = "SELECT last_modified FROM Documents WHERE path = :path";
+        let mut stmt = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: Could not prepare query {}: {}", query, err);
+        })?;
+        let bindings: Vec<(&str, sqlite::Value)> = vec![
+            (":path", sqlite::Value::String(file_path.display().to_string()))
+        ];
+        stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+            eprintln!("ERROR: Could not bind path for requires_reindexing: {}", err);
+        })?;
+        match stmt.next().map_err(|err| {
+            eprintln!("ERROR: Could not execute query {}: {}", query, err);
+        })? {
+            sqlite::State::Row => {
+                let stored_ts: i64 = stmt.read("last_modified").map_err(|err| {
+                    eprintln!("ERROR: Could not read last_modified: {}", err);
+                })?;
+                Ok(stored_ts < new_ts)
+            },
+            sqlite::State::Done => {
+                Ok(true)
+            }
+        }
     }
 }
 

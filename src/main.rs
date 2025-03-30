@@ -152,10 +152,12 @@ fn entry() -> Result<(), ()> {
                     thread::spawn(move || {
                         let mut skipped = 0;
                         add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped).unwrap();
+                        println!("Indexing complete for SQLite mode. {} files were skipped.", skipped);
                     });
                 }
                 server::start(&address, Arc::clone(&model))
-            } else {
+            } 
+            else {
                 let index_path = "index.json";
                 let exists = Path::new(index_path).try_exists().map_err(|err| {
                     eprintln!("ERROR: could not check the existence of file {}: {}", index_path, err);
@@ -167,7 +169,8 @@ fn entry() -> Result<(), ()> {
                     Box::new(serde_json::from_reader::<_, InMemoryModel>(index_file).map_err(|err| {
                         eprintln!("ERROR: could not parse index file {}: {}", index_path, err);
                     })?)
-                } else {
+                } 
+                else {
                     Box::new(InMemoryModel::default())
                 };
                 let model = Arc::new(Mutex::new(model));
@@ -176,6 +179,7 @@ fn entry() -> Result<(), ()> {
                     thread::spawn(move || {
                         let mut skipped = 0;
                         add_folder_to_model(Path::new(&dir_path), Arc::clone(&model_clone), &mut skipped).unwrap();
+                        println!("{skipped} files were skipped.");
                         let model_guard = model_clone.lock().unwrap();
                         let in_memory = model_guard.as_any().downcast_ref::<InMemoryModel>()
                             .expect("Expected an InMemoryModel");
