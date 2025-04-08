@@ -17,6 +17,31 @@ mod server;
 mod lexer;
 pub mod snowball;
 
+fn parse_entire_pdf_file(file_path: &Path) -> Result<String, ()> {
+    use poppler::Document;
+    use std::io::Read;
+    let mut content = Vec::new();
+    File::open(file_path)
+        .and_then(|mut file| file.read_to_end(&mut content))
+        .map_err(|err| {
+            eprintln!("ERROR: could not read file {file_path}: {err}", file_path = file_path.display());
+        })?;
+    let pdf = Document::from_data(&content, None).map_err(|err| {
+        eprintln!("ERROR: could not read file {file_path}: {err}",
+                  file_path = file_path.display());
+    })?;
+    let mut result = String::new();
+    let n = pdf.n_pages();
+    for i in 0..n {
+        let page = pdf.page(i).expect(&format!("{i} is within the bounds of the range of the page"));
+        if let Some(content) = page.text() {
+            result.push_str(content.as_str());
+            result.push(' ');
+        }
+    }
+    Ok(result)
+}
+
 fn parse_entire_txt_file(file_path: &Path) -> Result<String, ()> {
     fs::read_to_string(file_path).map_err(|err| {
         eprintln!("ERROR: could not open file {file_path}: {err}", file_path = file_path.display());
@@ -50,6 +75,7 @@ fn parse_entire_file_by_extension(file_path: &Path) -> Result<String, ()> {
     match extension.as_ref() {
         "xhtml" | "xml" | "html" => parse_entire_xml_file(file_path),
         "txt" | "md" => parse_entire_txt_file(file_path),
+        "pdf" => parse_entire_pdf_file(file_path),
         _ => {
             eprintln!("ERROR: cannot detect file type of {file_path}: unsupported extension {extension}", file_path = file_path.display(), extension = extension);
             Err(())
