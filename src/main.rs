@@ -83,13 +83,13 @@ fn parse_entire_file_by_extension(file_path: &Path) -> Result<String, ()> {
     }
 }
 
-fn save_model_as_json(model: &InMemoryModel, index_path: &str) -> Result<(), ()> {
-    println!("Saving {index_path}...");
+fn save_model_as_json(model: &InMemoryModel, index_path: &Path) -> Result<(), ()> {
+    println!("Saving {index_path}...", index_path = index_path.display());
     let index_file = File::create(index_path).map_err(|err| {
-        eprintln!("ERROR: could not create index file {index_path}: {err}", index_path = index_path, err = err);
+        eprintln!("ERROR: could not create index file {index_path}: {err}", index_path = index_path.display());
     })?;
     serde_json::to_writer_pretty(BufWriter::new(index_file), &model).map_err(|err| {
-        eprintln!("ERROR: could not write index file {index_path}: {err}", index_path = index_path, err = err);
+        eprintln!("ERROR: could not write index file {index_path}: {err}", index_path = index_path.display());
     })?;
     Ok(())
 }
@@ -103,6 +103,16 @@ fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>
             eprintln!("ERROR: could not read next file in directory {dir_path} during indexing: {err}", dir_path = dir_path.display(), err = err);
         })?;
         let file_path = file.path();
+        let dot_file = file_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.starts_with('.'))
+            .unwrap_or(false);
+        if dot_file {
+            println!("Skipping {file_path:?} because it is a dot file.", file_path = file_path);
+            *skipped += 1;
+            continue 'next_file;
+        }
         let file_type = file.file_type().map_err(|err| {
             eprintln!("ERROR: could not get file type of {file_path}: {err}", file_path = file_path.display(), err = err);
         })?;
@@ -191,16 +201,17 @@ fn entry() -> Result<(), ()> {
                 server::start(&address, Arc::clone(&model))
             } 
             else {
-                let index_path = "index.json";
-                let exists = Path::new(index_path).try_exists().map_err(|err| {
-                    eprintln!("ERROR: could not check the existence of file {}: {}", index_path, err);
+                let mut index_path = Path::new(&dir_path).to_path_buf();
+                index_path.push(".local_search_engine.json");
+                let exists = index_path.try_exists().map_err(|err| {
+                    eprintln!("ERROR: could not check the existence of file {index_path}: {err}", index_path = index_path.display());
                 })?;                
                 let model: Box<dyn Model + Send> = if exists {
                     let index_file = File::open(&index_path).map_err(|err| {
-                        eprintln!("ERROR: could not open index file {}: {}", index_path, err);
+                        eprintln!("ERROR: could not open index file {index_path}: {err}", index_path = index_path.display());
                     })?;
                     Box::new(serde_json::from_reader::<_, InMemoryModel>(index_file).map_err(|err| {
-                        eprintln!("ERROR: could not parse index file {}: {}", index_path, err);
+                        eprintln!("ERROR: could not parse index file {index_path}: {err}", index_path = index_path.display());
                     })?)
                 } 
                 else {
@@ -216,7 +227,7 @@ fn entry() -> Result<(), ()> {
                         if processed != 0 {
                             let model_guard = model_clone.lock().unwrap();
                             let in_memory = model_guard.as_any().downcast_ref::<InMemoryModel>().expect("Expected an InMemoryModel");
-                            save_model_as_json(in_memory, index_path).unwrap();
+                            save_model_as_json(in_memory, &index_path).unwrap();
                             println!("Indexing complete. Processed: {} files, Skipped: {} files.", processed, skipped);
                         }
                         else {
