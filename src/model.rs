@@ -16,7 +16,7 @@ pub trait Model: Send + Any {
 }
 
 pub struct SqliteModel {
-    connection: sqlite::Connection
+    pub connection: sqlite::Connection
 }
 
 impl SqliteModel {
@@ -344,7 +344,7 @@ pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
 
 #[derive(Deserialize, Serialize)]
-struct Doc {
+pub struct Doc {
     tf: TermFreq,
     count: usize,
     last_modified: SystemTime
@@ -354,8 +354,8 @@ type Docs = HashMap<PathBuf, Doc>;
 
 #[derive(Default, Deserialize, Serialize)]
 pub struct InMemoryModel {
-    docs: Docs,
-    df: DocFreq
+    pub docs: Docs,
+    pub df: DocFreq
 }
 
 impl Model for InMemoryModel {

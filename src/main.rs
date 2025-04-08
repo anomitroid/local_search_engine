@@ -179,9 +179,10 @@ fn entry() -> Result<(), ()> {
             })?;
             let address = args.next().unwrap_or("127.0.0.1:6969".to_string());
             if use_sqlite_mode {
-                let index_path = "index.db";
+                let mut index_path = Path::new(&dir_path).to_path_buf();
+                index_path.push(".local_search_engine.db");
                 let sqlite_model = SqliteModel::open(Path::new(&index_path)).map_err(|err| {
-                    eprintln!("ERROR: could not open sqlite database {}: {err:?}", index_path);
+                    eprintln!("ERROR: could not open sqlite database {index_path}: {err:?}", index_path = index_path.display());
                 })?;
                 let model: Arc<Mutex<Box<dyn Model + Send>>> = Arc::new(Mutex::new(Box::new(sqlite_model)));
                 {
