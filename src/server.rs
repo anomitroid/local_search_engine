@@ -1,5 +1,4 @@
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
-use std::fs::File;
 use std::{io, str};
 use std::sync::{Arc, Mutex};
 
@@ -17,20 +16,9 @@ fn serve_400(request: Request, message: &str) -> io::Result<()> {
     request.respond(Response::from_string(format!("400: {message}")).with_status_code(StatusCode(400)))
 }
 
-fn serve_static_file(request: Request, file_path: &str, content_type: &str) -> io::Result<()> {
+fn serve_bytes(request: Request, bytes: &[u8], content_type: &str) -> io::Result<()> {
     let content_type_header = Header::from_bytes("Content-Type", content_type).expect("header is fine");
-    let file = match File::open(file_path) {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("ERROR: could not open static file {file_path}: {err}", file_path = file_path, err = err);
-            if err.kind() == io::ErrorKind::NotFound {
-                return serve_404(request)
-            } 
-            return serve_500(request)
-        }
-    };
-    let response = Response::from_file(file).with_header(content_type_header);
-    request.respond(response)
+    request.respond(Response::from_data(bytes).with_header(content_type_header))
 }
 
 fn serve_api_search(model: Arc<Mutex<Box<dyn Model + Send>>>, mut request: Request) -> io::Result<()> {
@@ -73,10 +61,10 @@ fn serve_request(model: Arc<Mutex<Box<dyn Model + Send>>>, request: Request) -> 
             return serve_api_search(model, request)
         },
         (Method::Get, "/index.js") => {
-            return serve_static_file(request, "index.js", "text/javascript; charset=utf-8")
+            return serve_bytes(request, include_bytes!("index.js"), "text/javascript; charset=utf-8")
         }
         (Method::Get, "/") | (Method::Get, "/index.html") => {
-            return serve_static_file(request, "index.html", "text/html; charset=utf-8")
+            return serve_bytes(request, include_bytes!("index.html"), "text/html; charset=utf-8")
         }
         _ => {
             return serve_404(request)
