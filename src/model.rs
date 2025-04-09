@@ -433,3 +433,79 @@ fn compute_idf(t: &str, n: usize, df: &DocFreq) -> f32 {
     let m = df.get(t).cloned().unwrap_or(1) as f32;
     (n / m).log10()
 }
+
+
+/*
+------
+TF-IDF
+------
+
+tf(qi, d) = f(qi, d) / |d|
+where f(qi, d) is the number of times term qi appears in document d and |d| is the number of terms in document d.
+
+idf(qi, D) = log(|D| / |{d ∈ D : qi ∈ d}|)
+where |D| is the total number of documents in the collection and |{d ∈ D : qi ∈ d}| is the number of documents containing term qi.
+
+tf gives the importance of term qi in document d
+while idf gives the importance of term qi in the entire collection of documents D.
+
+if a term qi has high tf in a document d, it means that the term is important in that document.
+if a term qi has low idf in the entire collection of documents D, it means that the term is common in the entire collection.
+so, a less common term is better for pinpointing a singular document where that term is important.
+
+tfidf(qi, d, D) = tf(qi, d) * idf(qi, D)
+where tfidf(t, d, D) is the score of term qi in document d in the collection of documents D.
+
+them we sum the tfidf scores of all the terms in the query to get the score of the document for that query.
+
+====================================================================================================================================
+
+moving towards BM25 algorithm
+
+----
+BM25
+----
+
+score(d, Q) is the score of document d for query Q.
+which is basically, still given by tf-idf i.e. tf * idf
+
+score(d, Q) = ∑ IDF(qi) * f(qi, d) * (k + 1) / ( f(qi, d) + k * (1 - b + b * |D| / avgdl) )
+
+qi: query term or query token in query Q
+f(qi, d): frequency of term qi in document d (tf)
+avgdl: average document length in the collection of documents D
+|D|: number of documents in the collection of documents D
+IDF(qi): inverse document frequency of term qi which weighs down terms which appear in many documents
+k: a tuning parameter (usually set between 1.2 or 2.0)
+b: a tuning parameter (usually set between 0.75 and 0.95) which controls the effect of document length normalization
+
+IDF(qi) = log(((|D| - n(qi) + 0.5) / (n(qi) + 0.5)) + 1)
+
+n(qi): number of documents in the collection of documents D that contain term qi
+|D|: number of documents in the collection of documents D
+
+
+
+here, the raw frequency t(qi, d) is scaled by the factor:
+f(qi, d) * (k + 1) / (f(qi, d) + k * (1 - b + b * |D| / avgdl))
+
+when f(qi, d) is small, the scaling factor is close to 1.0.
+when f(qi, d) is large, the scaling factor is close to k + 1 / k * (1 - b + b * |D| / avgdl)
+as f(qi, d) increases, the numerator and denominator begin to balance each other out
+this causes the contribution of that term (qi) to "saturate"
+this avoids giving undue weight to very high-frequency terms and is more realistic than a raw frequency count.
+
+the denominator contains the factor (1 - b + b * |D| / avgdl)
+this is a normalization factor that adjusts the term frequency based on the length of the document.
+for longer documents (|D| > avgdl) this factor increases the denominator
+that reduces the term's contribution
+for shorter documents (|D| < avgdl) this factor decreases the denominator
+that increases the term's contribution
+so the term's impact isnt unduly penalized
+
+each term's contribution is furthur weighted by its inverse document frequency IDF(qi)
+this reduces the weight of terms that occur in many documents
+this is analogous to idf component of traditional tf-idf
+ensuring that rare terms contribute more to the final score than ubiquitous ones
+
+*/
