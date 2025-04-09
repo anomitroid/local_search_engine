@@ -355,7 +355,33 @@ type Docs = HashMap<PathBuf, Doc>;
 #[derive(Default, Deserialize, Serialize)]
 pub struct InMemoryModel {
     pub docs: Docs,
-    pub df: DocFreq
+    pub df: DocFreq,
+    #[serde(skip)]
+    pub idf_cache: HashMap<String, f32>,
+    #[serde(skip)]
+    pub avgdl: f32,
+}
+
+impl InMemoryModel {
+    fn update_cache(&mut self) {
+        let total_docs = self.docs.len() as f32;
+        let total_length = self.docs.values().map(|doc| doc.count as f32).sum::<f32>();
+        self.avgdl = if total_docs > 0f32 {
+            total_length / total_docs
+        } else {
+            0f32
+        };
+        self.idf_cache.clear();
+        for (term, &df) in &self.df {
+            let idf = if df > 0 {
+                (total_docs / df as f32).ln()
+            }
+            else {
+                0f32
+            };
+            self.idf_cache.insert(term.clone(), idf);
+        } 
+    }
 }
 
 impl Model for InMemoryModel {
@@ -367,10 +393,11 @@ impl Model for InMemoryModel {
         if let Some(doc) = self.docs.remove(file_path) {
             for t in doc.tf.keys() {
                 if let Some(f) = self.df.get_mut(t) {
-                    *f -= 1;
+                    *f = f.saturating_sub(1);
                 }
             }
         }
+        self.update_cache();
         Ok(())
     }
 
@@ -379,21 +406,14 @@ impl Model for InMemoryModel {
         let mut tf = TermFreq::new();
         let mut count = 0;
         for t in Lexer::new(&content) {
-            if let Some(f) = tf.get_mut(&t) {
-                *f += 1;
-            } else {
-                tf.insert(t, 1);
-            }
+            *tf.entry(t).or_insert(0) += 1;
             count += 1;
         }
         for t in tf.keys() {
-            if let Some(f) = self.df.get_mut(t) {
-                *f += 1;
-            } else {
-                self.df.insert(t.to_string(), 1);
-            }
+            *self.df.entry(t.to_string()).or_insert(0) += 1;
         }
         self.docs.insert(file_path, Doc {count, tf, last_modified});
+        self.update_cache();
         Ok(())
     }
 
@@ -403,7 +423,7 @@ impl Model for InMemoryModel {
             return Ok(vec![]);
         }
         let total_docs = self.docs.len() as f32;
-        let avgdl = self.docs.values().map(|doc| doc.count as f32).sum::<f32>() / total_docs;
+        let avgdl = self.avgdl;
         const K1: f32 = 1.5;
         const B: f32 = 0.75;
         let mut result = Vec::new();
@@ -414,9 +434,11 @@ impl Model for InMemoryModel {
                 if f == 0f32 {
                     continue;
                 }
-                let df = *self.df.get(token).unwrap_or(&1) as f32;
-                let idf = ((total_docs - df + 0.5) / (df + 0.5)).ln();
-                let tf_component = (f * (K1 + 1.0)) / (f + K1 + (1.0 - B + B * (doc.count as f32 / avgdl)));
+                let idf = self.idf_cache.get(token).cloned().unwrap_or_else(|| {
+                    (total_docs / 1.0).ln()
+                });
+                let denom = f + K1 * (1.0 - B + B * (doc.count as f32 / avgdl));
+                let tf_component = (f * (K1 + 1.0)) / denom;
                 score += idf * tf_component;
             }
             if !score.is_nan() {
