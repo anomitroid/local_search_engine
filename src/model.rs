@@ -398,19 +398,32 @@ impl Model for InMemoryModel {
     }
 
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
-        let mut result = Vec::new();
         let tokens = Lexer::new(&query).collect::<Vec<_>>();
+        if tokens.is_empty() {
+            return Ok(vec![]);
+        }
+        let total_docs = self.docs.len() as f32;
+        let avgdl = self.docs.values().map(|doc| doc.count as f32).sum::<f32>() / total_docs;
+        const K1: f32 = 1.5;
+        const B: f32 = 0.75;
+        let mut result = Vec::new();
         for (path, doc) in &self.docs {
-            let mut rank = 0f32;
+            let mut score = 0f32;
             for token in &tokens {
-                rank += compute_tf(&token, doc) * compute_idf(&token, self.docs.len(), &self.df);
+                let f = *doc.tf.get(token).unwrap_or(&0) as f32;
+                if f == 0f32 {
+                    continue;
+                }
+                let df = *self.df.get(token).unwrap_or(&1) as f32;
+                let idf = ((total_docs - df + 0.5) / (df + 0.5)).ln();
+                let tf_component = (f * (K1 + 1.0)) / (f + K1 + (1.0 - B + B * (doc.count as f32 / avgdl)));
+                score += idf * tf_component;
             }
-            if !rank.is_nan() {
-                result.push((path.clone(), rank));
+            if !score.is_nan() {
+                result.push((path.clone(), score));
             }
         }
-        result.sort_by(|(_, rank1), (_, rank2)| rank1.partial_cmp(rank2).expect(&format!("{rank1} and {rank2} are not comparable")));
-        result.reverse();
+        result.sort_by(|(_, score1), (_, score2)| score2.partial_cmp(score1).expect(&format!("{score1} and {score2} are not comparable")));
         Ok(result)
     }
 
@@ -422,17 +435,17 @@ impl Model for InMemoryModel {
     }
 }
 
-fn compute_tf(t: &str, doc: &Doc) -> f32 {
-    let n = doc.count as f32;
-    let m = doc.tf.get(t).cloned().unwrap_or(0) as f32;
-    m / n
-}
+// fn compute_tf(t: &str, doc: &Doc) -> f32 {
+//     let n = doc.count as f32;
+//     let m = doc.tf.get(t).cloned().unwrap_or(0) as f32;
+//     m / n
+// }
 
-fn compute_idf(t: &str, n: usize, df: &DocFreq) -> f32 {
-    let n = n as f32;
-    let m = df.get(t).cloned().unwrap_or(1) as f32;
-    (n / m).log10()
-}
+// fn compute_idf(t: &str, n: usize, df: &DocFreq) -> f32 {
+//     let n = n as f32;
+//     let m = df.get(t).cloned().unwrap_or(1) as f32;
+//     (n / m).log10()
+// }
 
 
 /*
@@ -469,14 +482,14 @@ BM25
 score(d, Q) is the score of document d for query Q.
 which is basically, still given by tf-idf i.e. tf * idf
 
-score(d, Q) = ∑ IDF(qi) * f(qi, d) * (k + 1) / ( f(qi, d) + k * (1 - b + b * |D| / avgdl) )
+score(d, Q) = ∑ IDF(qi) * f(qi, d) * (k1 + 1) / ( f(qi, d) + k1 * (1 - b + b * |D| / avgdl) )
 
 qi: query term or query token in query Q
 f(qi, d): frequency of term qi in document d (tf)
 avgdl: average document length in the collection of documents D
 |D|: number of documents in the collection of documents D
 IDF(qi): inverse document frequency of term qi which weighs down terms which appear in many documents
-k: a tuning parameter (usually set between 1.2 or 2.0)
+k1: a tuning parameter (usually set between 1.2 or 2.0)
 b: a tuning parameter (usually set between 0.75 and 0.95) which controls the effect of document length normalization
 
 IDF(qi) = log(((|D| - n(qi) + 0.5) / (n(qi) + 0.5)) + 1)
@@ -487,10 +500,10 @@ n(qi): number of documents in the collection of documents D that contain term qi
 
 
 here, the raw frequency t(qi, d) is scaled by the factor:
-f(qi, d) * (k + 1) / (f(qi, d) + k * (1 - b + b * |D| / avgdl))
+f(qi, d) * (k1 + 1) / (f(qi, d) + k1 * (1 - b + b * |D| / avgdl))
 
 when f(qi, d) is small, the scaling factor is close to 1.0.
-when f(qi, d) is large, the scaling factor is close to k + 1 / k * (1 - b + b * |D| / avgdl)
+when f(qi, d) is large, the scaling factor is close to k1 + 1 / k1 * (1 - b + b * |D| / avgdl)
 as f(qi, d) increases, the numerator and denominator begin to balance each other out
 this causes the contribution of that term (qi) to "saturate"
 this avoids giving undue weight to very high-frequency terms and is more realistic than a raw frequency count.
