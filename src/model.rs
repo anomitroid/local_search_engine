@@ -4,6 +4,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::any::Any;
+use std::cell::RefCell;
 
 use super::lexer::Lexer;
 
@@ -16,7 +17,10 @@ pub trait Model: Send + Any {
 }
 
 pub struct SqliteModel {
-    pub connection: sqlite::Connection
+    pub connection: sqlite::Connection,
+    idf_cache: RefCell<Option<HashMap<String, f32>>>,
+    avgdl: RefCell<Option<f32>>,
+    total_docs_cache: RefCell<Option<f32>>,
 }
 
 impl SqliteModel {
@@ -39,7 +43,12 @@ impl SqliteModel {
         let connection = sqlite::open(path).map_err(|err| {
             eprintln!("ERROR: could not open sqlite database {}: {}", path.display(), err);
         })?;
-        let this = Self { connection };
+        let this = Self { 
+            connection,
+            idf_cache: RefCell::new(None),
+            avgdl: RefCell::new(None),
+            total_docs_cache: RefCell::new(None),
+        };
         this.execute("
             CREATE TABLE IF NOT EXISTS Documents (
                 id INTEGER NOT NULL PRIMARY KEY,
@@ -65,7 +74,66 @@ impl SqliteModel {
                 UNIQUE(term)
             );
         ")?;
+        this.update_cache()?;
         Ok(this)
+    }
+
+    fn update_cache(&self) -> Result<(), ()> {
+        let total_docs = {
+            let query = "SELECT COUNT(*) as count FROM Documents";
+            let mut stmt = self.connection.prepare(query).map_err(|err| {
+                eprintln!("ERROR: could not prepare query {query}: {err}");
+            })?;
+            let count = match stmt.next().map_err(|err| {
+                eprintln!("ERROR: could not execute query {query}: {err}");
+            })? {
+                sqlite::State::Row => stmt.read::<i64, _>("count").map_err(|err| {
+                    eprintln!("ERROR: Reading count: {err}");
+                })? as f32,
+                _ => 0f32
+            };
+            count
+        };
+        *self.total_docs_cache.borrow_mut() = Some(total_docs);
+        let avgdl = {
+            let query = "SELECT AVG(term_count) as avgdl FROM Documents";
+            let mut stmt = self.connection.prepare(query).map_err(|err| {
+                eprintln!("ERROR: could not prepare query {query}: {err}");
+            })?;
+            let avgdl = match stmt.next().map_err(|err| {
+                eprintln!("ERROR: could not execute query {query}: {err}");
+            })? {
+                sqlite::State::Row => stmt.read::<f64, _>("avgdl").map_err(|err| {
+                    eprintln!("ERROR: Reading avgdl: {err}");
+                })? as f32,
+                _ => 0f32
+            };
+            avgdl
+        };
+        *self.avgdl.borrow_mut() = Some(avgdl);
+        let mut idf_cache = HashMap::new();
+        let query = "SELECT term, freq FROM DocFreq";
+        let mut stmt = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: could not prepare query {query}: {err}");
+        })?;
+        while let sqlite::State::Row = stmt.next().map_err(|err| {
+            eprintln!("ERROR: could not execute query {query}: {err}");
+        })? {
+            let term: String = stmt.read("term").map_err(|err| {
+                eprintln!("ERROR: Could not read term: {err}");
+            })?;
+            let df = stmt.read::<f64, _>("freq").map_err(|err| {
+                eprintln!("ERROR: Could not read freq: {err}");
+            })? as f32;
+            let idf = if df > 0.0 {
+                (total_docs - df + 0.5) / (df + 0.5).ln()
+            } else {
+                0f32
+            };
+            idf_cache.insert(term, idf);
+        }
+        *self.idf_cache.borrow_mut() = Some(idf_cache);
+        Ok(())
     }
     
     fn execute_with_binding(&self, query: &str, bindings: &[(&str, sqlite::Value)]) -> Result<(), ()> {
@@ -240,49 +308,35 @@ impl Model for SqliteModel {
     }
 
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
+        self.update_cache()?;
+        let total_docs = self.total_docs_cache.borrow().unwrap();
+        let avgdl = self.avgdl.borrow().unwrap();
+        let idf_cache = self.idf_cache.borrow();
         let tokens = Lexer::new(query).collect::<Vec<_>>();
         if tokens.is_empty() {
             return Ok(vec![]);
         }
-        let mut param_names = Vec::new();
-        for i in 0..tokens.len() {
-            param_names.push(format!(":token{}", i));
-        }
+        const K1: f32 = 1.5;
+        const B: f32 = 0.75;
+        let param_names = tokens.iter().enumerate()
+            .map(|(i, _)| format!(":token{i}")).collect::<Vec<_>>();
         let placeholders = param_names.join(",");
-        let total_docs = {
-            let documents_query = "SELECT COUNT(*) as count FROM Documents";
-            let mut stmt = self.connection.prepare(documents_query).map_err(|err| {
-                eprintln!("ERROR: Could not prepare total documents query {documents_query}: {err}");
-            })?;
-            let count = match stmt.next().map_err(|err| {
-                eprintln!("ERROR: Failed to execute total documents query {documents_query}: {err}");
-            })? {
-                sqlite::State::Row => stmt.read::<i64, _>("count").map_err(|err| {
-                    eprintln!("ERROR: Could not read total document count: {err}");
-                })?,
-                _ => {
-                    eprintln!("ERROR: Total documents query returned no rows");
-                    return Err(());
-                }
-            };
-            count
-        };
         let sql = format!(
             "
-                SELECT Documents.path as path, Documents.term_count as term_count, TermFreq.freq as tf, DocFreq.freq as df
+                SELECT Documents.path as path, Documents.term_count as term_count, TermFreq.freq as tf, DocFreq.freq as df, TermFreq.term as term
                 FROM TermFreq
                 JOIN Documents ON Documents.id = TermFreq.doc_id
                 JOIN DocFreq ON TermFreq.term = DocFreq.term
-                WHERE TermFreq.term IN ({})
-            ", placeholders
+                WHERE TermFreq.term IN ({placeholders})
+            "
         );
         let mut stmt = self.connection.prepare(sql.as_str()).map_err(|err| {
-            eprintln!("ERROR: Could not prepare such query: {err}");
+            eprintln!("ERROR: Could not prepare search query: {err}");
         })?;
         for (i, token) in tokens.iter().enumerate() {
-            let param_name = format!(":token{}", i);
-            stmt.bind::<(&str, sqlite::Value)>((param_name.as_str(), token.as_str().into())).map_err(|err| {
-                eprintln!("ERROR: Could not bind parameter {} for token '{}': {err}", param_name, token, err = err);
+            let param = format!(":token{i}");
+            stmt.bind::<(&str, sqlite::Value)>((param.as_str(), token.as_str().into())).map_err(|err| {
+                eprintln!("ERROR: Could not bind parameter {} for token '{}': {err}", param, token, err = err);
             })?;
         }
         let mut scores = HashMap::new();
@@ -294,20 +348,25 @@ impl Model for SqliteModel {
             })?;
             let term_count = stmt.read::<f64, _>("term_count").map_err(|err| {
                 eprintln!("ERROR: Could not read document term_count: {err}");
-            })?;
+            })? as f32;
             let tf = stmt.read::<f64, _>("tf").map_err(|err| {
                 eprintln!("ERROR: Could not read document term frequency: {err}");
-            })?;
+            })? as f32;
             let df = stmt.read::<f64, _>("df").map_err(|err| {
                 eprintln!("ERROR: Could not read document frequncy: {err}");
+            })? as f32;
+            let term: String = stmt.read("term").map_err(|err| {
+                eprintln!("ERROR: Could not read term: {}", err);
             })?;
-            let tf_ratio = (tf as f64) / (term_count as f64);
-            let idf = ((total_docs as f64) / ((df as f64).max(1.0) as f64)).log10();
-            let score = tf_ratio * idf;
-            let path: PathBuf = PathBuf::from(path_str);
-            *scores.entry(path).or_insert(0.0) += score;
+            let idf = idf_cache.as_ref().unwrap().get(&term).cloned().unwrap_or_else(|| {
+                ((total_docs - df + 0.5) / (df + 0.5)).ln()
+            });
+            let tf_component = (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * (term_count / avgdl)));
+            let score_contribution = idf * tf_component;
+            let path = PathBuf::from(path_str);
+            *scores.entry(path).or_insert(0f32) += score_contribution;
         }
-        let mut results = scores.into_iter().map(|(path, score)| (path, score as f32)).collect::<Vec<(_, _)>>();
+        let mut results = scores.into_iter().collect::<Vec<_>>();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         Ok(results)
     }
