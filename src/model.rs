@@ -352,7 +352,7 @@ impl Model for SqliteModel {
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
         self.update_cache()?;
         let total_docs = self.total_docs_cache.borrow().unwrap();
-        let avg_field_length = self.avgdl.borrow().as_ref().unwrap().clone();
+        let avg_field_length: HashMap<String, f32> = self.avgdl.borrow().as_ref().unwrap().clone();
         let idf_cache = self.idf_cache.borrow();
         let tokens = Lexer::new(query).collect::<Vec<_>>();
         if tokens.is_empty() {
@@ -365,8 +365,7 @@ impl Model for SqliteModel {
         let placeholders = param_names.join(",");
         let sql = format!(
             "
-            SELECT Documents.path AS path, DocumentField.field AS field, DocumentField.field_term_count AS field_length,
-                   TermFreq.freq AS tf, DocFreq.freq AS df, TermFreq.term AS term
+            SELECT Documents.path AS path, DocumentField.field AS field, DocumentField.field_term_count AS field_length, TermFreq.freq AS tf, DocFreq.freq AS df, TermFreq.term AS term
             FROM TermFreq
             JOIN Documents ON Documents.id = TermFreq.doc_id
             JOIN DocFreq ON TermFreq.term = DocFreq.term
@@ -410,17 +409,31 @@ impl Model for SqliteModel {
             let b = b_for_field(&field);
             let norm_tf = tf / (1.0 + b * ((field_length / avg_len) - 1.0));
             let weighted_tf = norm_tf * weights_for_fields(&field);
-            let idf = idf_cache.as_ref().unwrap().get(&term).cloned().unwrap_or_else(|| ((total_docs - df + 0.5) / (df + 0.5)).ln());
+            let idf = idf_cache.as_ref().unwrap().get(&term).cloned().unwrap_or_else(|| {
+                ((total_docs - df + 0.5) / (df + 0.5)).ln()
+            });
             let tf_component = (weighted_tf * (K1 + 1.0)) / (weighted_tf + K1);
             let score_contribution = idf * tf_component;
             let doc_path = PathBuf::from(path_str);
             *scores.entry(doc_path).or_insert(0f32) += score_contribution;
         }
+        let mut stmt_all = self.connection.prepare("SELECT path FROM Documents").map_err(|err| {
+            eprintln!("ERROR: could not prepare query for all documents: {}", err);
+        })?;
+        while let sqlite::State::Row = stmt_all.next().map_err(|err| {
+            eprintln!("ERROR: executing query for all documents: {}", err);
+        })? {
+            let doc_path_str: String = stmt_all.read("path").map_err(|err| {
+                eprintln!("ERROR: reading document path: {}", err);
+            })?;
+            let path = PathBuf::from(doc_path_str);
+            scores.entry(path).or_insert(0f32);
+        }
         let mut results = scores.into_iter().collect::<Vec<_>>();
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        Ok(results)
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(results.into_iter().collect())
     }
-    
+        
     fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()> {
         let new_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
         let query = "SELECT last_modified FROM Documents WHERE path = :path";
