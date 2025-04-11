@@ -130,13 +130,22 @@ fn add_folder_to_model(dir_path: &Path, model: Arc<Mutex<Box<dyn Model + Send>>>
         if model.requires_reindexing(&file_path, last_modified)? {
             println!("Indexing {file_path:?}...", file_path = file_path);
             let content = match parse_entire_file_by_extension(&file_path) {
-                Ok(content) => content.chars().collect::<Vec<_>>(),
+                Ok(content) => content,
                 Err(()) => {
                     *skipped += 1;
                     continue 'next_file;
                 }
             };
-            model.add_document(file_path, last_modified, &content)?;
+            let content_chars = content.chars().collect::<Vec<_>>();
+            let file_name = file_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let file_name_chars = file_name.chars().collect::<Vec<_>>();
+            let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let extension_chars = extension.chars().collect::<Vec<_>>();
+            let mut fields = std::collections::HashMap::new();
+            fields.insert("content".to_string(), content_chars);
+            fields.insert("name".to_string(), file_name_chars);
+            fields.insert("extension".to_string(), extension_chars);
+            model.add_document(file_path, last_modified, fields)?;
             *processed += 1;
         }
         else {

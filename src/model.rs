@@ -10,7 +10,7 @@ use super::lexer::Lexer;
 
 pub trait Model: Send + Any {
     fn as_any(&self) -> &dyn Any;
-    fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()>;
+    fn add_document(&mut self, file_path: PathBuf, last_modified: SystemTime, fields: HashMap<String, Vec<char>>) -> Result<(), ()>;
     fn remove_document(&mut self, file_path: &std::path::Path) -> Result<(), ()>;
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()>;
     fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()>;
@@ -31,10 +31,12 @@ impl SqliteModel {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn begin(&self) -> Result<(), ()> {
         self.execute("BEGIN;")
     } 
 
+    #[allow(dead_code)]
     pub fn commit(&self) -> Result<(), ()> {
         self.execute("COMMIT;")
     }
@@ -155,6 +157,82 @@ impl Model for SqliteModel {
         self
     }
 
+    
+    fn add_document(&mut self, _path: PathBuf, _last_modified: SystemTime, _fields: HashMap<String, Vec<char>>) -> Result<(), ()> {
+        // self.begin()?;
+        // self.remove_document(&path)?;
+        // let terms = Lexer::new(content).collect::<Vec<_>>();
+        // let lm_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
+        // let doc_id = {
+        //     let query = "INSERT INTO Documents (path, term_count, last_modified) VALUES (:path, :count, :last_modified)";
+        //     let log_err = |err| {
+        //         eprintln!("ERROR: Could not execute query {}: {}", query, err);
+        //     };
+        //     let mut stmt = self.connection.prepare(query).map_err(log_err)?;
+        //     let bindings: Vec<(&str, sqlite::Value)> = vec![
+        //         (":path", sqlite::Value::String(path.display().to_string())),
+        //         (":count", sqlite::Value::Integer(terms.len() as i64)),
+        //         (":last_modified", sqlite::Value::Integer(lm_ts)),
+        //     ];
+        //     stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
+        //     stmt.next().map_err(log_err)?;
+        //     unsafe {
+        //         sqlite3_sys::sqlite3_last_insert_rowid(self.connection.as_raw())
+        //     }
+        // };        
+        // let mut tf = TermFreq::new();
+        // for term in Lexer::new(content) {
+        //     *tf.entry(term).or_insert(0) += 1;
+        // }
+        // for (term, freq) in &tf {
+        //     {
+        //         let query = "INSERT INTO TermFreq(doc_id, term, freq) VALUES(:doc_id, :term, :freq)";
+        //         let log_err = |err| {
+        //             eprintln!("ERROR: Could not execute query {}: {}", query, err);
+        //         };
+        //         let mut stmt = self.connection.prepare(query).map_err(log_err)?;
+        //         let bindings: Vec<(&str, sqlite::Value)> = vec![
+        //             (":doc_id", sqlite::Value::Integer(doc_id)),
+        //             (":term", sqlite::Value::String(term.as_str().to_string())),
+        //             (":freq", sqlite::Value::Integer(*freq as i64))
+        //         ];
+        //         stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
+        //         stmt.next().map_err(log_err)?;
+        //     }
+        //     {
+        //         let current_freq = {
+        //             let query = "SELECT freq FROM DocFreq WHERE term = :term";
+        //             let log_err = |err| {
+        //                 eprintln!("ERROR: Could not execute query {}: {}", query, err);
+        //             };
+        //             let mut stmt = self.connection.prepare(query).map_err(log_err)?;
+        //             let bindings: Vec<(&str, sqlite::Value)> = vec![
+        //                 (":term", sqlite::Value::String(term.as_str().to_string()))
+        //             ];
+        //             stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
+        //             match stmt.next().map_err(log_err)? {
+        //                 sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(log_err)?,
+        //                 sqlite::State::Done => 0,
+        //             }
+        //         };
+        //         let update_query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
+        //         let log_err = |err| {
+        //             eprintln!("ERROR: Could not execute query {}: {}", update_query, err);
+        //         };
+        //         let mut stmt = self.connection.prepare(update_query).map_err(log_err)?;
+        //         let bindings: Vec<(&str, sqlite::Value)> = vec![
+        //             (":term", sqlite::Value::String(term.as_str().to_string())),
+        //             (":freq", sqlite::Value::Integer(current_freq + 1))
+        //         ];
+        //         stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
+        //         stmt.next().map_err(log_err)?;
+        //     }
+        // }
+        // self.commit()?;
+        Ok(())
+    }
+
+
     fn remove_document(&mut self, file_path: &std::path::Path) -> Result<(), ()> {
         let query = "SELECT id FROM Documents WHERE path = :path";
         let mut stmt = self.connection.prepare(query).map_err(|err| {
@@ -230,80 +308,6 @@ impl Model for SqliteModel {
                 eprintln!("ERROR: Could not execute query {}: {}", delete_doc, err);
             })?;
         }
-        Ok(())
-    }
-
-    fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
-        self.begin()?;
-        self.remove_document(&path)?;
-        let terms = Lexer::new(content).collect::<Vec<_>>();
-        let lm_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
-        let doc_id = {
-            let query = "INSERT INTO Documents (path, term_count, last_modified) VALUES (:path, :count, :last_modified)";
-            let log_err = |err| {
-                eprintln!("ERROR: Could not execute query {}: {}", query, err);
-            };
-            let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-            let bindings: Vec<(&str, sqlite::Value)> = vec![
-                (":path", sqlite::Value::String(path.display().to_string())),
-                (":count", sqlite::Value::Integer(terms.len() as i64)),
-                (":last_modified", sqlite::Value::Integer(lm_ts)),
-            ];
-            stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-            stmt.next().map_err(log_err)?;
-            unsafe {
-                sqlite3_sys::sqlite3_last_insert_rowid(self.connection.as_raw())
-            }
-        };        
-        let mut tf = TermFreq::new();
-        for term in Lexer::new(content) {
-            *tf.entry(term).or_insert(0) += 1;
-        }
-        for (term, freq) in &tf {
-            {
-                let query = "INSERT INTO TermFreq(doc_id, term, freq) VALUES(:doc_id, :term, :freq)";
-                let log_err = |err| {
-                    eprintln!("ERROR: Could not execute query {}: {}", query, err);
-                };
-                let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-                let bindings: Vec<(&str, sqlite::Value)> = vec![
-                    (":doc_id", sqlite::Value::Integer(doc_id)),
-                    (":term", sqlite::Value::String(term.as_str().to_string())),
-                    (":freq", sqlite::Value::Integer(*freq as i64))
-                ];
-                stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-                stmt.next().map_err(log_err)?;
-            }
-            {
-                let current_freq = {
-                    let query = "SELECT freq FROM DocFreq WHERE term = :term";
-                    let log_err = |err| {
-                        eprintln!("ERROR: Could not execute query {}: {}", query, err);
-                    };
-                    let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-                    let bindings: Vec<(&str, sqlite::Value)> = vec![
-                        (":term", sqlite::Value::String(term.as_str().to_string()))
-                    ];
-                    stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-                    match stmt.next().map_err(log_err)? {
-                        sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(log_err)?,
-                        sqlite::State::Done => 0,
-                    }
-                };
-                let update_query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
-                let log_err = |err| {
-                    eprintln!("ERROR: Could not execute query {}: {}", update_query, err);
-                };
-                let mut stmt = self.connection.prepare(update_query).map_err(log_err)?;
-                let bindings: Vec<(&str, sqlite::Value)> = vec![
-                    (":term", sqlite::Value::String(term.as_str().to_string())),
-                    (":freq", sqlite::Value::Integer(current_freq + 1))
-                ];
-                stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-                stmt.next().map_err(log_err)?;
-            }
-        }
-        self.commit()?;
         Ok(())
     }
 
@@ -401,11 +405,11 @@ impl Model for SqliteModel {
 
 pub type TermFreq = HashMap<String, usize>;
 pub type DocFreq = HashMap<String, usize>;
+pub type FieldData = (TermFreq, usize);
 
 #[derive(Deserialize, Serialize)]
 pub struct Doc {
-    tf: TermFreq,
-    count: usize,
+    fields: HashMap<String, FieldData>,
     last_modified: SystemTime
 }
 
@@ -418,22 +422,52 @@ pub struct InMemoryModel {
     #[serde(skip)]
     pub idf_cache: HashMap<String, f32>,
     #[serde(skip)]
-    pub avgdl: f32,
+    pub avg_field_length: HashMap<String, f32>,
+}
+
+fn weights_for_fields(field: &str) -> f32 {
+    match field {
+        "name" => 2.0,
+        "content" => 1.0,
+        "extension" => 0.5,
+        _ => 1.0,
+    }
+}
+
+fn b_for_field(field: &str) -> f32 {
+    match field {
+        "name" => 0.75,
+        "content" => 0.75,
+        "extension" => 0.75,
+        _ => 0.75,
+    }
 }
 
 impl InMemoryModel {
     fn update_cache(&mut self) {
         let total_docs = self.docs.len() as f32;
-        let total_length = self.docs.values().map(|doc| doc.count as f32).sum::<f32>();
-        self.avgdl = if total_docs > 0f32 {
-            total_length / total_docs
-        } else {
-            0f32
-        };
+        let mut field_totals = HashMap::new();
         self.idf_cache.clear();
-        for (term, &df) in &self.df {
-            let idf = if df > 0 {
-                (total_docs / df as f32).ln()
+        for (_path, doc) in &self.docs {
+            for (field, &(_, field_len)) in &doc.fields {
+                let entry = field_totals.entry(field.to_string()).or_insert((0, 0));
+                entry.0 += field_len;
+                entry.1 += 1;
+            }
+        }
+        self.avg_field_length.clear();
+        for (field, (total_len, doc_count)) in field_totals {
+            let avg = if doc_count > 0 {
+                total_len as f32 / doc_count as f32
+            }
+            else {
+                0f32
+            };
+            self.avg_field_length.insert(field, avg);
+        }
+        for (term, &doc_freq) in &self.df {
+            let idf = if doc_freq > 0 {
+                (total_docs / doc_freq as f32).ln()
             }
             else {
                 0f32
@@ -448,30 +482,44 @@ impl Model for InMemoryModel {
         self
     }
 
-    fn remove_document(&mut self, file_path: &Path) -> Result<(), ()>{
-        if let Some(doc) = self.docs.remove(file_path) {
-            for t in doc.tf.keys() {
-                if let Some(f) = self.df.get_mut(t) {
-                    *f = f.saturating_sub(1);
-                }
+    fn add_document(&mut self, file_path: PathBuf, last_modified: SystemTime, fields: HashMap<String, Vec<char>>) -> Result<(), ()> {
+        self.remove_document(&file_path)?;
+        let mut doc_fields = HashMap::new();
+        let mut unique_terms = std::collections::HashSet::new();
+        for (field, content) in fields {
+            let mut tf = TermFreq::new();
+            let mut count = 0;
+            for token in Lexer::new(&content) {
+                *tf.entry(token).or_insert(0) += 1;
+                count += 1;
             }
+            for term in tf.keys() {
+                unique_terms.insert(term.clone());
+            }
+            doc_fields.insert(field, (tf, count));
         }
+        for term in unique_terms {
+            *self.df.entry(term).or_insert(0) += 1;
+        }
+        self.docs.insert(file_path, Doc {fields: doc_fields, last_modified});
         self.update_cache();
         Ok(())
     }
 
-    fn add_document(&mut self, file_path: PathBuf, last_modified: SystemTime, content: &[char]) -> Result<(), ()> {
-        self.remove_document(&file_path)?;
-        let mut tf = TermFreq::new();
-        let mut count = 0;
-        for t in Lexer::new(&content) {
-            *tf.entry(t).or_insert(0) += 1;
-            count += 1;
+    fn remove_document(&mut self, file_path: &Path) -> Result<(), ()>{
+        if let Some(doc) = self.docs.remove(file_path) {
+            let mut seen_terms = std::collections::HashSet::new();
+            for (_field, (tf, _)) in doc.fields {
+                for term in tf.keys().cloned().collect::<Vec<_>>() {
+                    seen_terms.insert(term);
+                }
+            }
+            for term in seen_terms {
+                if let Some(count) = self.df.get_mut(&term) {
+                    *count = count.saturating_sub(1);
+                }
+            }
         }
-        for t in tf.keys() {
-            *self.df.entry(t.to_string()).or_insert(0) += 1;
-        }
-        self.docs.insert(file_path, Doc {count, tf, last_modified});
         self.update_cache();
         Ok(())
     }
@@ -482,22 +530,30 @@ impl Model for InMemoryModel {
             return Ok(vec![]);
         }
         let total_docs = self.docs.len() as f32;
-        let avgdl = self.avgdl;
         const K1: f32 = 1.5;
-        const B: f32 = 0.75;
         let mut result = Vec::new();
         for (path, doc) in &self.docs {
             let mut score = 0f32;
             for token in &tokens {
-                let f = *doc.tf.get(token).unwrap_or(&0) as f32;
-                if f == 0f32 {
+                let mut aggregate_freq = 0f32;
+                for (field, &(ref field_tf, field_len)) in &doc.fields {
+                    let f = *field_tf.get(token).unwrap_or(&0) as f32;
+                    if f == 0f32 {
+                        continue;
+                    }
+                    let avg_field_len = self.avg_field_length.get(field).cloned().unwrap_or(field_len as f32);
+                    let b = b_for_field(field);
+                    let norm_tf = f / (1.0 + b * (field_len as f32 / avg_field_len - 1.0));
+                    let weight = weights_for_fields(field);
+                    aggregate_freq += weight * norm_tf;
+                }
+                if aggregate_freq == 0f32 {
                     continue;
                 }
                 let idf = self.idf_cache.get(token).cloned().unwrap_or_else(|| {
                     (total_docs / 1.0).ln()
                 });
-                let denom = f + K1 * (1.0 - B + B * (doc.count as f32 / avgdl));
-                let tf_component = (f * (K1 + 1.0)) / denom;
+                let tf_component = (aggregate_freq * (K1 + 1.0)) / (aggregate_freq + K1);
                 score += idf * tf_component;
             }
             if !score.is_nan() {
@@ -602,4 +658,44 @@ this reduces the weight of terms that occur in many documents
 this is analogous to idf component of traditional tf-idf
 ensuring that rare terms contribute more to the final score than ubiquitous ones
 
+====================================================================================================================================
+
+moving towards BM25F algorithm
+
+-----
+BM25F
+-----
+
+now we want to include multiple fields in out BM25
+until now we were considering only the file content for search
+now we want more, file name, file extension, and other file metadata
+
+so, there will be a collection of fields F (consisting of individual fields f)
+there will a corpus, or collectin of documents D (consisting of individual documents d)
+
+each field f has:
+1. it's own term frequency tf-f(qi, d) (frequency of term qi in document d for field f)
+2. field specific length Lf (total number of terms in field f for document d)
+3. average field length avg(Lf) (average number of terms in field f for all documents in the collection D)
+4. a weight wf (relative importance of field f in the document d)
+5. field specific normalization parameter bf (analogous to b im BM25)
+
+for each field f, the normalised term frequency norm-tf-f(qi, d):
+norm-tf-f(qi, d) = tf-f(qi, d) / (1 + bf * (Lf / avg(Lf) - 1))
+
+BM25F then aggregates these normalised term frequencies across all fields weighted by their importance
+F(qi, d) = ∑ wf * norm-tf-f(qi, d) = ∑ wf * tf-f(qi, d) / (1 + bf * (Lf / avg(Lf) - 1))
+
+so, the final score of document d for query Q is given by:
+score(d, Q) = ∑ IDF(qi) * F(qi, d) * (k1 + 1) / (F(qi, d) + k1)
+
+where:
+k1: a global tuning parameter controlling the saturation of term  frequency
+F(qi, d): the aggregated normalised term frequency across all fields for term qi in document d
+IDF(qi): inverse document frequency of term qi which weighs down terms which appear in many documents
+
+IDF(qi) = log((|D| - n(qi) + 0.5) / (n(qi) + 0.5))
+
+n(qi): number of documents in the collection of documents D that contain term qi
+|D|: number of documents in the collection of documents D
 */
