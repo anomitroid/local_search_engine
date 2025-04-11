@@ -19,7 +19,7 @@ pub trait Model: Send + Any {
 pub struct SqliteModel {
     pub connection: sqlite::Connection,
     idf_cache: RefCell<Option<HashMap<String, f32>>>,
-    avgdl: RefCell<Option<f32>>,
+    avgdl: RefCell<Option<HashMap<String, f32>>>,
     total_docs_cache: RefCell<Option<f32>>,
 }
 
@@ -31,12 +31,10 @@ impl SqliteModel {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn begin(&self) -> Result<(), ()> {
         self.execute("BEGIN;")
     } 
 
-    #[allow(dead_code)]
     pub fn commit(&self) -> Result<(), ()> {
         self.execute("COMMIT;")
     }
@@ -55,7 +53,6 @@ impl SqliteModel {
             CREATE TABLE IF NOT EXISTS Documents (
                 id INTEGER NOT NULL PRIMARY KEY,
                 path TEXT,
-                term_count INTEGER,
                 last_modified INTEGER,
                 UNIQUE(path)
             );
@@ -64,8 +61,9 @@ impl SqliteModel {
             CREATE TABLE IF NOT EXISTS TermFreq (
                 term TEXT,
                 doc_id INTEGER,
+                field TEXT,
                 freq INTEGER,
-                UNIQUE(term, doc_id),
+                UNIQUE(term, doc_id, field),
                 FOREIGN KEY(doc_id) REFERENCES Documents(id)
             );
         ")?;
@@ -76,6 +74,15 @@ impl SqliteModel {
                 UNIQUE(term)
             );
         ")?;
+        this.execute("
+            CREATE TABLE IF NOT EXISTS DocumentField (
+                doc_id INTEGER,
+                field TEXT,
+                field_term_count INTEGER,
+                UNIQUE(doc_id, field),
+                FOREIGN KEY(doc_id) REFERENCES Documents(id)
+            );
+        ")?;
         this.update_cache()?;
         Ok(this)
     }
@@ -84,60 +91,57 @@ impl SqliteModel {
         let total_docs = {
             let query = "SELECT COUNT(*) as count FROM Documents";
             let mut stmt = self.connection.prepare(query).map_err(|err| {
-                eprintln!("ERROR: could not prepare query {query}: {err}");
+                eprintln!("ERROR: could not prepare query {}: {}", query, err);
             })?;
             let count = match stmt.next().map_err(|err| {
-                eprintln!("ERROR: could not execute query {query}: {err}");
+                eprintln!("ERROR: could not execute query {}: {}", query, err);
             })? {
                 sqlite::State::Row => stmt.read::<i64, _>("count").map_err(|err| {
-                    eprintln!("ERROR: Reading count: {err}");
+                    eprintln!("ERROR: Reading count: {}", err);
                 })? as f32,
                 _ => 0f32
             };
             count
         };
         *self.total_docs_cache.borrow_mut() = Some(total_docs);
-        let avgdl = {
-            let query = "SELECT AVG(term_count) as avgdl FROM Documents";
-            let mut stmt = self.connection.prepare(query).map_err(|err| {
-                eprintln!("ERROR: could not prepare query {query}: {err}");
+        let mut avg_field_length = HashMap::new();
+        let query = "SELECT field, AVG(field_term_count) as avglen FROM DocumentField GROUP BY field";
+        let mut stmt = self.connection.prepare(query).map_err(|err| {
+            eprintln!("ERROR: could not prepare query {}: {}", query, err);
+        })?;
+        while let sqlite::State::Row = stmt.next().map_err(|err| {
+            eprintln!("ERROR: executing query {}: {}", query, err);
+        })? {
+            let field: String = stmt.read("field").map_err(|err| {
+                eprintln!("ERROR: reading field: {}", err);
             })?;
-            let avgdl = match stmt.next().map_err(|err| {
-                eprintln!("ERROR: could not execute query {query}: {err}");
-            })? {
-                sqlite::State::Row => stmt.read::<f64, _>("avgdl").map_err(|err| {
-                    eprintln!("ERROR: Reading avgdl: {err}");
-                })? as f32,
-                _ => 0f32
-            };
-            avgdl
-        };
-        *self.avgdl.borrow_mut() = Some(avgdl);
+            let avg: f64 = stmt.read("avglen").map_err(|err| {
+                eprintln!("ERROR: reading avglen: {}", err);
+            })?;
+            avg_field_length.insert(field, avg as f32);
+        }
+        *self.avgdl.borrow_mut() = Some(avg_field_length);
         let mut idf_cache = HashMap::new();
         let query = "SELECT term, freq FROM DocFreq";
         let mut stmt = self.connection.prepare(query).map_err(|err| {
-            eprintln!("ERROR: could not prepare query {query}: {err}");
+            eprintln!("ERROR: could not prepare query {}: {}", query, err);
         })?;
         while let sqlite::State::Row = stmt.next().map_err(|err| {
-            eprintln!("ERROR: could not execute query {query}: {err}");
+            eprintln!("ERROR: executing query {}: {}", query, err);
         })? {
             let term: String = stmt.read("term").map_err(|err| {
-                eprintln!("ERROR: Could not read term: {err}");
+                eprintln!("ERROR: reading term: {}", err);
             })?;
             let df = stmt.read::<f64, _>("freq").map_err(|err| {
-                eprintln!("ERROR: Could not read freq: {err}");
+                eprintln!("ERROR: reading freq: {}", err);
             })? as f32;
-            let idf = if df > 0.0 {
-                (total_docs - df + 0.5) / (df + 0.5).ln()
-            } else {
-                0f32
-            };
+            let idf = if df > 0.0 { ((total_docs - df + 0.5) / (df + 0.5)).ln() } else { 0f32 };
             idf_cache.insert(term, idf);
         }
         *self.idf_cache.borrow_mut() = Some(idf_cache);
         Ok(())
     }
-    
+        
     fn execute_with_binding(&self, query: &str, bindings: &[(&str, sqlite::Value)]) -> Result<(), ()> {
         let mut stmt = self.connection.prepare(query).map_err(|err| {
             eprintln!("ERROR: could not prepare query {}: {}", query, err);
@@ -158,80 +162,114 @@ impl Model for SqliteModel {
     }
 
     
-    fn add_document(&mut self, _path: PathBuf, _last_modified: SystemTime, _fields: HashMap<String, Vec<char>>) -> Result<(), ()> {
-        // self.begin()?;
-        // self.remove_document(&path)?;
-        // let terms = Lexer::new(content).collect::<Vec<_>>();
-        // let lm_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
-        // let doc_id = {
-        //     let query = "INSERT INTO Documents (path, term_count, last_modified) VALUES (:path, :count, :last_modified)";
-        //     let log_err = |err| {
-        //         eprintln!("ERROR: Could not execute query {}: {}", query, err);
-        //     };
-        //     let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-        //     let bindings: Vec<(&str, sqlite::Value)> = vec![
-        //         (":path", sqlite::Value::String(path.display().to_string())),
-        //         (":count", sqlite::Value::Integer(terms.len() as i64)),
-        //         (":last_modified", sqlite::Value::Integer(lm_ts)),
-        //     ];
-        //     stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-        //     stmt.next().map_err(log_err)?;
-        //     unsafe {
-        //         sqlite3_sys::sqlite3_last_insert_rowid(self.connection.as_raw())
-        //     }
-        // };        
-        // let mut tf = TermFreq::new();
-        // for term in Lexer::new(content) {
-        //     *tf.entry(term).or_insert(0) += 1;
-        // }
-        // for (term, freq) in &tf {
-        //     {
-        //         let query = "INSERT INTO TermFreq(doc_id, term, freq) VALUES(:doc_id, :term, :freq)";
-        //         let log_err = |err| {
-        //             eprintln!("ERROR: Could not execute query {}: {}", query, err);
-        //         };
-        //         let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-        //         let bindings: Vec<(&str, sqlite::Value)> = vec![
-        //             (":doc_id", sqlite::Value::Integer(doc_id)),
-        //             (":term", sqlite::Value::String(term.as_str().to_string())),
-        //             (":freq", sqlite::Value::Integer(*freq as i64))
-        //         ];
-        //         stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-        //         stmt.next().map_err(log_err)?;
-        //     }
-        //     {
-        //         let current_freq = {
-        //             let query = "SELECT freq FROM DocFreq WHERE term = :term";
-        //             let log_err = |err| {
-        //                 eprintln!("ERROR: Could not execute query {}: {}", query, err);
-        //             };
-        //             let mut stmt = self.connection.prepare(query).map_err(log_err)?;
-        //             let bindings: Vec<(&str, sqlite::Value)> = vec![
-        //                 (":term", sqlite::Value::String(term.as_str().to_string()))
-        //             ];
-        //             stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-        //             match stmt.next().map_err(log_err)? {
-        //                 sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(log_err)?,
-        //                 sqlite::State::Done => 0,
-        //             }
-        //         };
-        //         let update_query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
-        //         let log_err = |err| {
-        //             eprintln!("ERROR: Could not execute query {}: {}", update_query, err);
-        //         };
-        //         let mut stmt = self.connection.prepare(update_query).map_err(log_err)?;
-        //         let bindings: Vec<(&str, sqlite::Value)> = vec![
-        //             (":term", sqlite::Value::String(term.as_str().to_string())),
-        //             (":freq", sqlite::Value::Integer(current_freq + 1))
-        //         ];
-        //         stmt.bind_iter(bindings.iter().cloned()).map_err(log_err)?;
-        //         stmt.next().map_err(log_err)?;
-        //     }
-        // }
-        // self.commit()?;
+    fn add_document(&mut self, path: PathBuf, last_modified: SystemTime, fields: HashMap<String, Vec<char>>) -> Result<(), ()> {
+        self.begin()?;
+        self.remove_document(&path)?;
+        let mut unique_terms = std::collections::HashSet::new();
+        let lm_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
+        let doc_id = {
+            let query = "INSERT INTO Documents (path, last_modified) VALUES (:path, :last_modified)";
+            let mut stmt = self.connection.prepare(query).map_err(|err| {
+                eprintln!("ERROR: Could not prepare query {}: {}", query, err);
+            })?;
+            let bindings = vec![
+                (":path", sqlite::Value::String(path.display().to_string())),
+                (":last_modified", sqlite::Value::Integer(lm_ts)),
+            ];
+            stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+                eprintln!("ERROR: Could not bind parameters: {}", err);
+            })?;
+            stmt.next().map_err(|err| {
+                eprintln!("ERROR: Could not execute query {}: {}", query, err);
+            })?;
+            unsafe {
+                sqlite3_sys::sqlite3_last_insert_rowid(self.connection.as_raw())
+            }
+        };
+        for (field, content_chars) in fields.iter() {
+            let mut tf: TermFreq = HashMap::new();
+            let mut count = 0;
+            for token in Lexer::new(content_chars) {
+                *tf.entry(token).or_insert(0) += 1;
+                count += 1;
+            }
+            for term in tf.keys() {
+                unique_terms.insert(term.clone());
+            }
+            {
+                let query = "INSERT INTO DocumentField(doc_id, field, field_term_count) VALUES(:doc_id, :field, :field_term_count)";
+                let mut stmt = self.connection.prepare(query).map_err(|err| {
+                    eprintln!("ERROR: preparing query {}: {}", query, err);
+                })?;
+                let bindings = vec![
+                    (":doc_id", sqlite::Value::Integer(doc_id)),
+                    (":field", sqlite::Value::String(field.clone())),
+                    (":field_term_count", sqlite::Value::Integer(count as i64)),
+                ];
+                stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+                    eprintln!("ERROR: binding query {}: {}", query, err);
+                })?;
+                stmt.next().map_err(|err| {
+                    eprintln!("ERROR: executing query {}: {}", query, err);
+                })?;
+            }
+            for (term, freq) in tf.iter() {
+                let query = "INSERT INTO TermFreq(doc_id, term, field, freq) VALUES(:doc_id, :term, :field, :freq)";
+                let mut stmt = self.connection.prepare(query).map_err(|err| {
+                    eprintln!("ERROR: preparing query {}: {}", query, err);
+                })?;
+                let bindings = vec![
+                    (":doc_id", sqlite::Value::Integer(doc_id)),
+                    (":term", sqlite::Value::String(term.clone())),
+                    (":field", sqlite::Value::String(field.clone())),
+                    (":freq", sqlite::Value::Integer(*freq as i64)),
+                ];
+                stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+                    eprintln!("ERROR: binding parameters for {}: {}", query, err);
+                })?;
+                stmt.next().map_err(|err| {
+                    eprintln!("ERROR: executing query {}: {}", query, err);
+                })?;
+            }
+        }
+        for term in unique_terms {
+            let current_freq = {
+                let query = "SELECT freq FROM DocFreq WHERE term = :term";
+                let mut stmt = self.connection.prepare(query).map_err(|err| {
+                    eprintln!("ERROR: preparing query {}: {}", query, err);
+                })?;
+                let bindings = vec![( ":term", sqlite::Value::String(term.clone()))];
+                stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+                    eprintln!("ERROR: binding term for DocFreq: {}", err);
+                })?;
+                match stmt.next().map_err(|err| {
+                    eprintln!("ERROR: executing query {}: {}", query, err);
+                })? {
+                    sqlite::State::Row => stmt.read::<i64, _>("freq").map_err(|err| {
+                        eprintln!("ERROR: reading freq for {}: {}", term, err);
+                    })? as i64,
+                    sqlite::State::Done => 0,
+                }
+            };
+            let update_query = "INSERT OR REPLACE INTO DocFreq(term, freq) VALUES(:term, :freq)";
+            let mut stmt = self.connection.prepare(update_query).map_err(|err| {
+                eprintln!("ERROR: preparing query {}: {}", update_query, err);
+            })?;
+            let new_freq = current_freq + 1;
+            let bindings = vec![
+                (":term", sqlite::Value::String(term.clone())),
+                (":freq", sqlite::Value::Integer(new_freq)),
+            ];
+            stmt.bind_iter(bindings.iter().cloned()).map_err(|err| {
+                eprintln!("ERROR: binding update DocFreq: {}", err);
+            })?;
+            stmt.next().map_err(|err| {
+                eprintln!("ERROR: executing update DocFreq: {}", err);
+            })?;
+        }
+        self.commit()?;
         Ok(())
-    }
-
+    }    
 
     fn remove_document(&mut self, file_path: &std::path::Path) -> Result<(), ()> {
         let query = "SELECT id FROM Documents WHERE path = :path";
@@ -314,67 +352,75 @@ impl Model for SqliteModel {
     fn search_query(&self, query: &[char]) -> Result<Vec<(PathBuf, f32)>, ()> {
         self.update_cache()?;
         let total_docs = self.total_docs_cache.borrow().unwrap();
-        let avgdl = self.avgdl.borrow().unwrap();
+        let avg_field_length = self.avgdl.borrow().as_ref().unwrap().clone();
         let idf_cache = self.idf_cache.borrow();
         let tokens = Lexer::new(query).collect::<Vec<_>>();
         if tokens.is_empty() {
             return Ok(vec![]);
         }
         const K1: f32 = 1.5;
-        const B: f32 = 0.75;
         let param_names = tokens.iter().enumerate()
-            .map(|(i, _)| format!(":token{i}")).collect::<Vec<_>>();
+            .map(|(i, _)| format!(":token{i}"))
+            .collect::<Vec<_>>();
         let placeholders = param_names.join(",");
         let sql = format!(
             "
-                SELECT Documents.path as path, Documents.term_count as term_count, TermFreq.freq as tf, DocFreq.freq as df, TermFreq.term as term
-                FROM TermFreq
-                JOIN Documents ON Documents.id = TermFreq.doc_id
-                JOIN DocFreq ON TermFreq.term = DocFreq.term
-                WHERE TermFreq.term IN ({placeholders})
+            SELECT Documents.path AS path, DocumentField.field AS field, DocumentField.field_term_count AS field_length,
+                   TermFreq.freq AS tf, DocFreq.freq AS df, TermFreq.term AS term
+            FROM TermFreq
+            JOIN Documents ON Documents.id = TermFreq.doc_id
+            JOIN DocFreq ON TermFreq.term = DocFreq.term
+            JOIN DocumentField ON DocumentField.doc_id = Documents.id AND DocumentField.field = TermFreq.field
+            WHERE TermFreq.term IN ({placeholders})
             "
         );
         let mut stmt = self.connection.prepare(sql.as_str()).map_err(|err| {
-            eprintln!("ERROR: Could not prepare search query: {err}");
+            eprintln!("ERROR: Could not prepare search query: {}", err);
         })?;
         for (i, token) in tokens.iter().enumerate() {
             let param = format!(":token{i}");
-            stmt.bind::<(&str, sqlite::Value)>((param.as_str(), token.as_str().into())).map_err(|err| {
-                eprintln!("ERROR: Could not bind parameter {} for token '{}': {err}", param, token, err = err);
-            })?;
+            stmt.bind::<(&str, sqlite::Value)>((param.as_str(), sqlite::Value::String(token.clone())))
+                .map_err(|err| {
+                    eprintln!("ERROR: Could not bind parameter {}: {}", param, err);
+                })?;
         }
-        let mut scores = HashMap::new();
+        let mut scores: HashMap<PathBuf, f32> = HashMap::new();
         while let sqlite::State::Row = stmt.next().map_err(|err| {
-            eprintln!("ERROR: Error executing search query: {err}");
+            eprintln!("ERROR: executing search query: {}", err);
         })? {
-            let path_str = stmt.read::<String, _>("path").map_err(|err| {
-                eprintln!("ERROR: Could not read document path: {err}");
+            let path_str: String = stmt.read("path").map_err(|err| {
+                eprintln!("ERROR: reading document path: {}", err);
             })?;
-            let term_count = stmt.read::<f64, _>("term_count").map_err(|err| {
-                eprintln!("ERROR: Could not read document term_count: {err}");
+            let field: String = stmt.read("field").map_err(|err| {
+                eprintln!("ERROR: reading field: {}", err);
+            })?;
+            let field_length: f32 = stmt.read::<f64, _>("field_length").map_err(|err| {
+                eprintln!("ERROR: reading field_length: {}", err);
             })? as f32;
-            let tf = stmt.read::<f64, _>("tf").map_err(|err| {
-                eprintln!("ERROR: Could not read document term frequency: {err}");
+            let tf: f32 = stmt.read::<f64, _>("tf").map_err(|err| {
+                eprintln!("ERROR: reading tf: {}", err);
             })? as f32;
-            let df = stmt.read::<f64, _>("df").map_err(|err| {
-                eprintln!("ERROR: Could not read document frequncy: {err}");
+            let df: f32 = stmt.read::<f64, _>("df").map_err(|err| {
+                eprintln!("ERROR: reading df: {}", err);
             })? as f32;
             let term: String = stmt.read("term").map_err(|err| {
-                eprintln!("ERROR: Could not read term: {}", err);
+                eprintln!("ERROR: reading term: {}", err);
             })?;
-            let idf = idf_cache.as_ref().unwrap().get(&term).cloned().unwrap_or_else(|| {
-                ((total_docs - df + 0.5) / (df + 0.5)).ln()
-            });
-            let tf_component = (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * (term_count / avgdl)));
+            let avg_len = avg_field_length.get(&field).cloned().unwrap_or(field_length);
+            let b = b_for_field(&field);
+            let norm_tf = tf / (1.0 + b * ((field_length / avg_len) - 1.0));
+            let weighted_tf = norm_tf * weights_for_fields(&field);
+            let idf = idf_cache.as_ref().unwrap().get(&term).cloned().unwrap_or_else(|| ((total_docs - df + 0.5) / (df + 0.5)).ln());
+            let tf_component = (weighted_tf * (K1 + 1.0)) / (weighted_tf + K1);
             let score_contribution = idf * tf_component;
-            let path = PathBuf::from(path_str);
-            *scores.entry(path).or_insert(0f32) += score_contribution;
+            let doc_path = PathBuf::from(path_str);
+            *scores.entry(doc_path).or_insert(0f32) += score_contribution;
         }
         let mut results = scores.into_iter().collect::<Vec<_>>();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         Ok(results)
     }
-
+    
     fn requires_reindexing(&mut self, file_path: &Path, last_modified: SystemTime) -> Result<bool, ()> {
         let new_ts = last_modified.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| ())?.as_secs() as i64;
         let query = "SELECT last_modified FROM Documents WHERE path = :path";
